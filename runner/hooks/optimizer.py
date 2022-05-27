@@ -588,6 +588,12 @@ class EfficientSampleOptimizerHook(Hook):
         if len(params) > 0:
             return clip_grad.clip_grad_norm_(params, **self.grad_clip)
 
+    def before_train_epoch(self, runner):
+        pass
+
+    def fileter_function(self, runner):
+        pass
+
     def after_train_iter(self, runner):
         runner.optimizer.zero_grad()
         if self.detect_anomalous_params:
@@ -601,8 +607,88 @@ class EfficientSampleOptimizerHook(Hook):
                 runner.log_buffer.update({'grad_norm': float(grad_norm)},
                                          runner.outputs['num_samples'])
 
-        if runner.epoch % 10 != 0:
+        # if runner.epoch % 10 != 0:
+        if self.fileter_function():
             runner.optimizer.step()
+        else:
+            '''
+            backbone.conv1.weight
+            backbone.bn1.weight
+            backbone.bn1.bias
+            backbone.bn1.running_mean
+            backbone.bn1.running_var
+            backbone.bn1.num_batches_tracked
+            backbone.conv2.weight
+            backbone.bn2.weight
+            backbone.bn2.bias
+            backbone.bn2.running_mean
+            backbone.bn2.running_var
+            backbone.bn2.num_batches_tracked
+            backbone.layer1.0.conv1.weight
+            backbone.layer1.0.bn1.weight
+            backbone.layer1.0.bn1.bias
+            backbone.layer1.0.bn1.running_mean
+            backbone.layer1.0.bn1.running_var
+            backbone.layer1.0.bn1.num_batches_tracked
+            backbone.layer1.0.conv2.weight
+            backbone.layer1.0.bn2.weight
+            backbone.layer1.0.bn2.bias
+            backbone.layer1.0.bn2.running_mean
+            backbone.layer1.0.bn2.running_var
+            backbone.layer1.0.bn2.num_batches_tracked
+            backbone.layer1.0.conv3.weight
+            backbone.layer1.0.bn3.weight
+            backbone.transition1.0.0.weight
+            backbone.transition1.0.1.weight
+            backbone.transition1.0.1.bias
+            .
+            .
+            backbone.stage2.0.fuse_layers.1.0.0.1.running_var
+            backbone.stage2.0.fuse_layers.1.0.0.1.num_batches_tracked
+            backbone.transition2.2.0.0.weight
+            backbone.transition2.2.0.1.weight
+            backbone.transition2.2.0.1.bias
+            .
+            .
+            backbone.stage2.0.fuse_layers.1.0.0.0.weight torch.Size([64, 32, 3, 3])
+            backbone.stage2.0.fuse_layers.1.0.0.1.weight torch.Size([64])
+            backbone.stage2.0.fuse_layers.1.0.0.1.bias torch.Size([64])
+            backbone.transition2.2.0.0.weight torch.Size([128, 64, 3, 3])
+            backbone.transition2.2.0.1.weight torch.Size([128])
+            backbone.transition2.2.0.1.bias torch.Size([128])
+            backbone.stage3.0.branches.0.0.conv1.weight torch.Size([32, 32, 3, 3])
+            backbone.stage3.0.branches.0.0.bn1.weight torch.Size([32])
+            .
+            .
+            backbone.stage3.3.fuse_layers.2.1.0.1.bias torch.Size([128])
+            backbone.transition3.3.0.0.weight torch.Size([256, 128, 3, 3])
+            backbone.transition3.3.0.1.weight torch.Size([256])
+            backbone.transition3.3.0.1.bias torch.Size([256])
+            backbone.stage4.0.branches.0.0.conv1.weight torch.Size([32, 32, 3, 3])
+            backbone.stage4.0.branches.0.0.bn1.weight torch.Size([32])
+            backbone.stage4.0.branches.0.0.bn1.bias torch.Size([32])
+            .
+            .
+            backbone.stage4.2.fuse_layers.0.3.0.weight torch.Size([32, 256, 1, 1])
+            backbone.stage4.2.fuse_layers.0.3.1.weight torch.Size([32])
+            backbone.stage4.2.fuse_layers.0.3.1.bias torch.Size([32])
+            keypoint_head.final_layer.weight torch.Size([17, 32, 1, 1])
+            keypoint_head.final_layer.bias torch.Size([17])
+            '''
+            param_dict = {}
+            grad_stages = [0 for i in range(4)]
+            for name, parameters in runner.model.module.named_parameters():
+                # print(name, parameters.shape)
+                # param_dict[name]=parameters
+                if ('stage4' in name) or ('final_layer' in name):
+                    grad_stages[3] += parameters().abs().sum()
+                elif ('stage3' in name) or ('transition3' in name):
+                    grad_stages[2] += parameters().abs().sum()
+                elif ('stage2' in name) or ('transition2' in name):
+                    grad_stages[1] += parameters().abs().sum()
+                else:
+                    grad_stages[0] += parameters().abs().sum()
+        
         
 
     def detect_anomalous_parameters(self, loss, runner):
@@ -630,3 +716,5 @@ class EfficientSampleOptimizerHook(Hook):
                     level=logging.ERROR,
                     msg=f'{n} with shape {p.size()} is not '
                     f'in the computational graph \n')
+
+    
