@@ -592,7 +592,7 @@ class EfficientSampleOptimizerHook(Hook):
         pass
 
     def fileter_function(self, runner):
-        pass
+        return False
 
     def after_train_iter(self, runner):
         runner.optimizer.zero_grad()
@@ -608,7 +608,7 @@ class EfficientSampleOptimizerHook(Hook):
                                          runner.outputs['num_samples'])
 
         # if runner.epoch % 10 != 0:
-        if self.fileter_function():
+        if self.fileter_function(runner):
             runner.optimizer.step()
         else:
             '''
@@ -681,13 +681,15 @@ class EfficientSampleOptimizerHook(Hook):
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
                 if ('stage4' in name) or ('final_layer' in name):
-                    grad_stages[3] += parameters().abs().sum()
+                    grad_stages[3] += parameters.grad.abs().sum().item()
                 elif ('stage3' in name) or ('transition3' in name):
-                    grad_stages[2] += parameters().abs().sum()
+                    grad_stages[2] += parameters.grad.abs().sum().item()
                 elif ('stage2' in name) or ('transition2' in name):
-                    grad_stages[1] += parameters().abs().sum()
+                    grad_stages[1] += parameters.grad.abs().sum().item()
                 else:
-                    grad_stages[0] += parameters().abs().sum()
+                    grad_stages[0] += parameters.grad.abs().sum().item()
+            
+            print(grad_stages)
         
         
 
