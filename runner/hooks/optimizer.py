@@ -597,8 +597,18 @@ class EfficientSampleOptimizerHook(Hook):
     def after_train_iter(self, runner):
         runner.optimizer.zero_grad()
         if self.detect_anomalous_params:
-            self.detect_anomalous_parameters(runner.outputs['loss'], runner)
+            self.detect_anomalous_parameters(runner.outputs['loss'], runner)\
+
+        # import torch
+        # gpu_id = torch.cuda.current_device()
+        # if gpu_id == 3:
+        #     import time 
+        #     time.sleep(10)
         runner.outputs['loss'].backward()
+        # print('over backward')
+        # for name, parameters in runner.model.module.named_parameters():
+        #     print('-'*20, parameters.grad.mean())
+        #     break
 
         if self.grad_clip is not None:
             grad_norm = self.clip_grads(runner.model.parameters())
@@ -675,8 +685,18 @@ class EfficientSampleOptimizerHook(Hook):
             keypoint_head.final_layer.weight torch.Size([17, 32, 1, 1])
             keypoint_head.final_layer.bias torch.Size([17])
             '''
+            import torch
             param_dict = {}
             grad_stages = [0 for i in range(4)]
+            # grad_stages = {
+            #     0 : [0 for i in range(4)],
+            #     1 : [0 for i in range(4)],
+            #     2 : [0 for i in range(4)],
+            #     3 : [0 for i in range(4)],
+            # }
+            gpu_id = torch.cuda.current_device()
+            
+            # print(runner.model.device, torch.cuda.current_device(), 'loss :', runner.outputs['loss'])
             for name, parameters in runner.model.module.named_parameters():
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
