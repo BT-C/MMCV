@@ -287,10 +287,12 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.mode = 'train'
         self.data_loader = data_loader
         self._max_iters = self._max_epochs * len(self.data_loader)
+        self.grad_result = [0 for _ in range(4)]
         self.call_hook('before_train_epoch')
         time.sleep(2)  # Prevent possible deadlock during epoch transition
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
+            # print(len(self.data_loader))
             # print(self.model.device)
             # print(self.model.device, ' : ' , data_batch['img'].sum(), data_batch['img'].shape)
             self.call_hook('before_train_iter')
@@ -298,6 +300,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self.call_hook('after_train_iter')
             self._iter += 1
 
+        print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         self.call_hook('after_train_epoch')
         self._epoch += 1
 

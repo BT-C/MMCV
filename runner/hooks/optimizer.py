@@ -700,6 +700,8 @@ class EfficientSampleOptimizerHook(Hook):
             for name, parameters in runner.model.module.named_parameters():
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
+                if parameters.grad is None:
+                    continue
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()
                 elif ('stage3' in name) or ('transition3' in name):
@@ -707,9 +709,12 @@ class EfficientSampleOptimizerHook(Hook):
                 elif ('stage2' in name) or ('transition2' in name):
                     grad_stages[1] += parameters.grad.abs().sum().item()
                 else:
-                    grad_stages[0] += parameters.grad.abs().sum().item()
+                    if parameters.grad is not None:
+                        grad_stages[0] += parameters.grad.abs().sum().item()
             
-            print(grad_stages)
+            # print(grad_stages)
+            for j in range(len(grad_stages)):
+                runner.grad_result[j] += grad_stages[j]
         
         
 
