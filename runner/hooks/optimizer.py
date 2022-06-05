@@ -701,9 +701,11 @@ class EfficientSampleOptimizerHook(Hook):
             for name, parameters in runner.model.module.named_parameters():
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
-                temp_all_grad.append(parameters.grad.abs().sum().item())
+                if 'bn' in name:
+                    print('*'*100, name)
                 if (parameters.grad is None) or ('bn' in name):
                     continue
+                temp_all_grad.append(parameters.grad.abs().sum().item())
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()
                 elif ('stage3' in name) or ('transition3' in name):
@@ -728,7 +730,7 @@ class EfficientSampleOptimizerHook(Hook):
             #         image_name = runner.image_meta[j]['image_file']
             #         os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/train", image_name.split("/")[-1])}')
             #         print(image_name)
-            print(gpu_id, grad_stages)
+            # print(gpu_id, grad_stages)
             for j in range(len(grad_stages)):
                 runner.grad_result[j] += grad_stages[j]
         
