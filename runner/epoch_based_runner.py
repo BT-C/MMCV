@@ -287,20 +287,104 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.mode = 'train'
         self.data_loader = data_loader
         self._max_iters = self._max_epochs * len(self.data_loader)
+        self.all_layer_grad = []
+
+        import numpy as np
+        temp_record = []
+        self.all_temp_layer_grad = []
         self.grad_result = [0 for _ in range(4)]
         self.call_hook('before_train_epoch')
         time.sleep(2)  # Prevent possible deadlock during epoch transition
+
+        import random
+        import os
+        seed = 0
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        os.environ['PYTHONHASHSEED'] = str(seed)
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
+            # print(i, '/', len(self.data_loader))
             # print(len(self.data_loader))
             # print(self.model.device)
-            # print(self.model.device, ' : ' , data_batch['img'].sum(), data_batch['img'].shape)
+            # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
+            # print(type(data_batch))
+
+            # print(type(data_batch['img_metas'].data))
+            image_meta = data_batch['img_metas'].data
+            # print(len(image_meta))
+            # print(len(image_meta[0]))
+            temp_name = []
+            temp_name.append(str(i))
+            for j in range(len(image_meta[0])):
+                # print(image_meta[0][j]['image_file'])
+                temp_name.append(image_meta[0][j]['image_file'].split('/')[-1])
+            self.image_meta = data_batch['img_metas'].data[0]
+            
+            # print(data_batch['img_metas'].data[0][0]['image_file'])
+            temp_record.append(np.array([
+                i, len(self.data_loader), torch.cuda.current_device(),
+                data_batch['img'].abs().sum().item()
+                # *temp_name
+            ]))
+            
             self.call_hook('before_train_iter')
             self.run_iter(data_batch, train_mode=True, **kwargs)
             self.call_hook('after_train_iter')
+            # print(self.all_temp_layer_grad)
             self._iter += 1
+            # print(torch.randn(2, 2))
+            # ----------------------------------------------------------
+            if i == ((len(self.data_loader) // 2) - 1):
+                pass
+            # if True:
+            # if i == 4:
+                # pass
+                # from mmcv.runner import get_dist_info, init_dist, set_random_seed
+                # import random
+                # import os
+                # pass
+                # seed = 0
+                # random.seed(seed)
+                # np.random.seed(seed)
+                # torch.manual_seed(seed)
+                # torch.cuda.manual_seed(seed)
+                # # torch.cuda.manual_seed_all(seed)
+                # os.environ['PYTHONHASHSEED'] = str(seed)
+                # set_random_seed(seed)
+            # if i == 10:
+            #     break
+            # ----------------------------------------------------------
 
+        all_grad = 0
+        for temp_grad in self.grad_result:
+            all_grad += temp_grad
+
+        # all_layers_grad = np.array(self.all_layer_grad)
+        # np.savetxt(
+        #     f"/home/chenbeitao/data/code/Test/txt/result{torch.cuda.current_device()}.txt", 
+        #     np.array(all_layers_grad)
+        # )
+        
+        print(np.array(temp_record))
+        # np.savetxt(
+        #     f"/home/chenbeitao/data/code/Test/txt/filename{torch.cuda.current_device()}.txt", 
+        #     np.array(temp_record),
+        #     '%s'
+        # )
+        np.savetxt(
+            f"/home/chenbeitao/data/code/Test/txt/seed_batch{torch.cuda.current_device()}.txt", 
+            np.array(temp_record),
+        )
+        # np.savetxt(
+        #     f"/home/chenbeitao/data/code/Test/txt/train_all_grad{torch.cuda.current_device()}.txt", 
+        #     np.array(self.all_temp_layer_grad)
+        # )
         print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
+        print(f'all grad : {all_grad}')
+
         self.call_hook('after_train_epoch')
         self._epoch += 1
 

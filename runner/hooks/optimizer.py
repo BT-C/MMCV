@@ -695,12 +695,14 @@ class EfficientSampleOptimizerHook(Hook):
             #     3 : [0 for i in range(4)],
             # }
             gpu_id = torch.cuda.current_device()
-            
+            temp_all_grad = []
+            temp_layer_grad = []
             # print(runner.model.device, torch.cuda.current_device(), 'loss :', runner.outputs['loss'])
             for name, parameters in runner.model.module.named_parameters():
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
-                if parameters.grad is None:
+                temp_all_grad.append(parameters.grad.abs().sum().item())
+                if (parameters.grad is None) or ('bn' in name):
                     continue
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()
@@ -712,7 +714,21 @@ class EfficientSampleOptimizerHook(Hook):
                     if parameters.grad is not None:
                         grad_stages[0] += parameters.grad.abs().sum().item()
             
-            # print(grad_stages)
+            # print('gpu_id : ', gpu_id, 'loss :', runner.outputs['loss'], grad_stages)
+            # print(len(temp_all_grad))
+            import numpy as np
+            # np.savetxt("/home/chenbeitao/data/code/Test/txt/result.txt", np.array(temp_all_grad))
+            runner.all_layer_grad.append(np.array(temp_all_grad))
+            runner.all_temp_layer_grad.append(np.array(grad_stages))
+            
+            # if (np.array(grad_stages) > np.array([0.09304577, 0.05629569, 0.6235519 , 1.6534002])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.09979996, 0.06050889, 0.67000383, 1.7848371])).sum() == 4:
+            #     import os
+            #     for j in range(len(runner.image_meta)):
+            #         image_name = runner.image_meta[j]['image_file']
+            #         os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/train", image_name.split("/")[-1])}')
+            #         print(image_name)
+            print(gpu_id, grad_stages)
             for j in range(len(grad_stages)):
                 runner.grad_result[j] += grad_stages[j]
         
