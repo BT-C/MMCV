@@ -331,6 +331,15 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             ]))
             
             self.call_hook('before_train_iter')
+            # ------------------------------------------------------------
+            model_weight = 0
+            for name, parameters in self.model.module.named_parameters():
+                if parameters is None:
+                    continue
+                model_weight += parameters.abs().sum().item()
+            # print('gpu_id : ', torch.cuda.current_device(), model_weight)
+            # ------------------------------------------------------------
+
             self.run_iter(data_batch, train_mode=True, **kwargs)
             self.call_hook('after_train_iter')
             # print(self.all_temp_layer_grad)
@@ -342,7 +351,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # print(torch.randn(2, 2))
             # ----------------------------------------------------------
             if i == ((len(self.data_loader) // 2) - 1):
-                # pass
+                pass
             # if True:
             # if i == 4:
                 # pass
@@ -350,14 +359,14 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 # import random
                 # import os
                 # pass
-                seed = 0
-                random.seed(seed)
-                np.random.seed(seed)
-                torch.manual_seed(seed)
-                torch.cuda.manual_seed(seed)
-                # torch.cuda.manual_seed_all(seed)
-                os.environ['PYTHONHASHSEED'] = str(seed)
-                # set_random_seed(seed)
+                # seed = 0
+                # random.seed(seed)
+                # np.random.seed(seed)
+                # torch.manual_seed(seed)
+                # torch.cuda.manual_seed(seed)
+                # # torch.cuda.manual_seed_all(seed)
+                # os.environ['PYTHONHASHSEED'] = str(seed)
+                # # set_random_seed(seed)
             # if i == 10:
             #     break
             # ----------------------------------------------------------
@@ -382,10 +391,15 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         #     f"/home/chenbeitao/data/code/Test/txt/seed_batch{torch.cuda.current_device()}.txt", 
         #     np.array(temp_record),
         # )
-        np.savetxt(
-            f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
-            np.array(self.all_temp_layer_grad)
-        )
+        # np.savetxt(
+        #     f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
+        #     np.array(self.all_temp_layer_grad)
+        # )
+        
+        # np.savetxt(
+        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_higher_train{torch.cuda.current_device()}.txt", 
+        #     np.array(self.all_temp_layer_grad)
+        # )
         print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         print(f'all grad : {all_grad}')
 

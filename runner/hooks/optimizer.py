@@ -701,8 +701,8 @@ class EfficientSampleOptimizerHook(Hook):
             for name, parameters in runner.model.module.named_parameters():
                 # print(name, parameters.shape)
                 # param_dict[name]=parameters
-                if 'bn' in name:
-                    print('*'*100, name)
+                # if 'bn' in name:
+                #     print('*'*100, name)
                 if (parameters.grad is None) or ('bn' in name):
                     continue
                 temp_all_grad.append(parameters.grad.abs().sum().item())
@@ -725,11 +725,17 @@ class EfficientSampleOptimizerHook(Hook):
             
             # if (np.array(grad_stages) > np.array([0.09304577, 0.05629569, 0.6235519 , 1.6534002])).sum() == 4:
             # if (np.array(grad_stages) > np.array([0.09979996, 0.06050889, 0.67000383, 1.7848371])).sum() == 4:
-            #     import os
-            #     for j in range(len(runner.image_meta)):
-            #         image_name = runner.image_meta[j]['image_file']
-            #         os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/train", image_name.split("/")[-1])}')
-            #         print(image_name)
+            # if (np.array(grad_stages) > np.array([0.3793958 , 0.01894367, 0.19144724, 0.99496942])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.43092558, 0.02166538, 0.21900302, 1.13392802])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.98959535, 0.48403644, 4.40175368, 5.35036675])).sum() == 4:
+
+            if (np.array(grad_stages) > np.array([ 5.38665474,  2.62785841, 23.74116398, 30.01025121])).sum() == 4:
+                import os
+                print(len(runner.image_meta))
+                for j in range(len(runner.image_meta)):
+                    image_name = runner.image_meta[j]['image_file']
+                    os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/higher/val-origin-model", image_name.split("/")[-1])}')
+                    print(image_name)
             # print(gpu_id, grad_stages)
             for j in range(len(grad_stages)):
                 runner.grad_result[j] += grad_stages[j]
