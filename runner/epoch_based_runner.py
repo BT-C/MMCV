@@ -350,22 +350,23 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self._iter += 1
             # print(torch.randn(2, 2))
             # ----------------------------------------------------------
-            if i == ((len(self.data_loader) // 2) - 1):
-                pass
-            # if True:
+            # if i == ((len(self.data_loader) // 2) - 1):
+            # if i == 1:
+                # pass
+            if True:
             # if i == 4:
                 # pass
                 # from mmcv.runner import get_dist_info, init_dist, set_random_seed
                 # import random
                 # import os
                 # pass
-                # seed = 0
-                # random.seed(seed)
-                # np.random.seed(seed)
-                # torch.manual_seed(seed)
-                # torch.cuda.manual_seed(seed)
-                # # torch.cuda.manual_seed_all(seed)
-                # os.environ['PYTHONHASHSEED'] = str(seed)
+                seed = 0
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                torch.cuda.manual_seed(seed)
+                # torch.cuda.manual_seed_all(seed)
+                os.environ['PYTHONHASHSEED'] = str(seed)
                 # # set_random_seed(seed)
             # if i == 10:
             #     break
@@ -392,7 +393,9 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         #     np.array(temp_record),
         # )
         # np.savetxt(
-        #     f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
+        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
+        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup.txt", 
+        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_backup_DISABLE_NCCL.txt", 
         #     np.array(self.all_temp_layer_grad)
         # )
         
@@ -400,6 +403,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         #     f"/home/chenbeitao/data/code/Test/txt/all_grad_higher_train{torch.cuda.current_device()}.txt", 
         #     np.array(self.all_temp_layer_grad)
         # )
+        print(torch.cuda.current_device(), self.all_temp_layer_grad)
         print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         print(f'all grad : {all_grad}')
 

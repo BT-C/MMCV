@@ -604,6 +604,8 @@ class EfficientSampleOptimizerHook(Hook):
         # if gpu_id == 3:
         #     import time 
         #     time.sleep(10)
+        import torch
+        print(torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'])
         runner.outputs['loss'].backward()
         # print('over backward')
         # for name, parameters in runner.model.module.named_parameters():
@@ -729,13 +731,13 @@ class EfficientSampleOptimizerHook(Hook):
             # if (np.array(grad_stages) > np.array([0.43092558, 0.02166538, 0.21900302, 1.13392802])).sum() == 4:
             # if (np.array(grad_stages) > np.array([0.98959535, 0.48403644, 4.40175368, 5.35036675])).sum() == 4:
 
-            if (np.array(grad_stages) > np.array([ 5.38665474,  2.62785841, 23.74116398, 30.01025121])).sum() == 4:
-                import os
-                print(len(runner.image_meta))
-                for j in range(len(runner.image_meta)):
-                    image_name = runner.image_meta[j]['image_file']
-                    os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/higher/val-origin-model", image_name.split("/")[-1])}')
-                    print(image_name)
+            # if (np.array(grad_stages) > np.array([ 5.38665474,  2.62785841, 23.74116398, 30.01025121])).sum() == 4:
+            #     import os
+            #     print(len(runner.image_meta))
+            #     for j in range(len(runner.image_meta)):
+            #         image_name = runner.image_meta[j]['image_file']
+            #         os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/higher/train-trained-model", image_name.split("/")[-1])}')
+            #         print(image_name)
             # print(gpu_id, grad_stages)
             for j in range(len(grad_stages)):
                 runner.grad_result[j] += grad_stages[j]
