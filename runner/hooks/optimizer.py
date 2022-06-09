@@ -717,12 +717,14 @@ class EfficientSampleOptimizerHook(Hook):
             temp_layer_grad = []
             # print(runner.model.device, torch.cuda.current_device(), 'loss :', runner.outputs['loss'])
             for name, parameters in runner.model.module.named_parameters():
-                # print(name, parameters.shape)
+                
                 # param_dict[name]=parameters
                 # if 'bn' in name:
                 #     print('*'*100, name)
                 if (parameters.grad is None) or ('bn' in name):
+                    # print(name, 'None')
                     continue
+                print(gpu_id, name, parameters.grad.abs().sum().item())
                 temp_all_grad.append(parameters.grad.abs().sum().item())
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()

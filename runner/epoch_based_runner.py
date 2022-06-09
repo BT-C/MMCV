@@ -292,6 +292,12 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         print('finish every layer hook')
 
     def register_every_layer_hook(self, children_module):
+        def efficient_sample_backward_hook(layer, gin, gout):
+            # print(type(layer), gout[0].abs().sum().item())
+            # if type(layer) != torch.nn.modules.loss.MSELoss:
+            print(torch.cuda.current_device(), layer, gin[0].abs().sum().item())
+            # self.every_layer_grad.append(gout[0].abs().sum().item())
+
         if len(list(children_module[1].named_children())) == 0:
             # children_module[1].register_forward_hook(
             #     # lambda layer, input, output : print(output.shape, output.abs().sum())
@@ -300,8 +306,12 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             children_module[1].register_backward_hook(
                 # lambda layer, gin, gout : print(gout[0].shape)
                 # lambda layer, gin, gout : print(gout[0].abs().sum().item())
-                lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum().item())
+                # lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum().item())
+                # lambda layer, gin, gout : print(layer, type(layer), gout[0].abs().sum().item())
+                # lambda layer, gin, gout : print(type(layer), layer.requires_grad)
+                efficient_sample_backward_hook
             )
+
             return 
 
         for sub_module_tuple in children_module[1].named_children():
@@ -423,8 +433,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # )
 
         # np.savetxt(
-        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
-        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_backup{torch.cuda.current_device()}.txt", 
+        #     f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
+        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup{torch.cuda.current_device()}.txt", 
         #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup.txt", 
         #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup_DISABLE_NCCL.txt", 
         #     np.array(self.all_temp_layer_grad)
@@ -439,10 +449,11 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # np.savetxt(
         #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_output{torch.cuda.current_device()}.txt", 
         #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_output_backup{torch.cuda.current_device()}.txt", 
-        #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_grad{torch.cuda.current_device()}.txt", 
-        #     f"/home/chenbeitao/data/code/Test/txt/every_layer_grad_backup{torch.cuda.current_device()}.txt", 
+        #     f"/home/chenbeitao/data/code/Test/txt/every_layer_grad{torch.cuda.current_device()}.txt", 
+        #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_grad_backup{torch.cuda.current_device()}.txt", 
         #     np.array(self.every_layer_grad)
         # )
+        print('every layer grad :', np.array(self.every_layer_grad).sum())
         print(torch.cuda.current_device(), self.all_temp_layer_grad)
         print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         print(f'all grad : {all_grad}')
