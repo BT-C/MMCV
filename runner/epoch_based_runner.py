@@ -337,7 +337,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 if parameters is None:
                     continue
                 model_weight += parameters.abs().sum().item()
-            # print('gpu_id : ', torch.cuda.current_device(), model_weight)
+            print('gpu_id : ', torch.cuda.current_device(), model_weight)
             # ------------------------------------------------------------
 
             self.run_iter(data_batch, train_mode=True, **kwargs)
