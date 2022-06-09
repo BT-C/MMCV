@@ -295,7 +295,11 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         def efficient_sample_backward_hook(layer, gin, gout):
             # print(type(layer), gout[0].abs().sum().item())
             # if type(layer) != torch.nn.modules.loss.MSELoss:
-            print(torch.cuda.current_device(), layer, gin[0].abs().sum().item())
+            # print(torch.cuda.current_device(), layer, gout[0].abs().sum().item())
+            print(torch.cuda.current_device(), layer)
+            for param in layer.parameters():
+                if param.grad is not None:
+                    print(param.shape, param.grad.abs().sum().item())
             # self.every_layer_grad.append(gout[0].abs().sum().item())
 
         if len(list(children_module[1].named_children())) == 0:
@@ -313,7 +317,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             )
 
             return 
-
+            
         for sub_module_tuple in children_module[1].named_children():
             self.register_every_layer_hook(sub_module_tuple)
         
