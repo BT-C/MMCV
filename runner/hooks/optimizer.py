@@ -611,14 +611,16 @@ class EfficientSampleOptimizerHook(Hook):
             if parameters is None:
                 continue
             model_weight += parameters.abs().sum().item()
-        print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
+        # print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
+
         runner.outputs['loss'].backward()
+
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
             if parameters is None:
                 continue
             model_weight += parameters.abs().sum().item()
-        print('after backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
+        # print('after backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
         # print('over backward')
         # for name, parameters in runner.model.module.named_parameters():
         #     print('-'*20, parameters.grad.mean())

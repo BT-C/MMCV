@@ -283,18 +283,23 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.outputs = outputs
 
     # -----------------------------------------------------------------------------------------
+    # def efficent_sample_forward_hook()
     def register_all_model(self):
+        self.every_layer_output = []
+        self.every_layer_grad = []
         for sub_module_tuple in self.model.module.named_children():
             self.register_every_layer_hook(sub_module_tuple)
         print('finish every layer hook')
 
     def register_every_layer_hook(self, children_module):
         if len(list(children_module[1].named_children())) == 0:
-            children_module[1].register_forward_hook(
-                lambda layer, input, output : print(output.shape, output.abs().sum())
-            )
-            children_module[1].register_backward_hook(
-                lambda layer, gin, gout : print(gout[0].abs().sum())
+            # children_module[1].register_forward_hook(
+            #     # lambda layer, input, output : print(output.shape, output.abs().sum())
+            #     lambda layer, input, output : self.every_layer_output.append(output.abs().sum().item())
+            # )
+            children_module[1].register_full_backward_hook(
+                # lambda layer, gin, gout : print(gout[0].abs().sum())
+                lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum())
             )
             return 
 
@@ -360,7 +365,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 if parameters is None:
                     continue
                 model_weight += parameters.abs().sum().item()
-            print('gpu_id : ', torch.cuda.current_device(), model_weight)
+            # print('gpu_id : ', torch.cuda.current_device(), model_weight)
             # ------------------------------------------------------------
 
             self.run_iter(data_batch, train_mode=True, **kwargs)
@@ -423,9 +428,18 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # )
         
         # np.savetxt(
-        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_higher_train{torch.cuda.current_device()}.txt", 
+        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_higher_backup{torch.cuda.current_device()}.txt", 
+        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_higher{torch.cuda.current_device()}.txt", 
         #     np.array(self.all_temp_layer_grad)
         # )
+
+        np.savetxt(
+            # f"/home/chenbeitao/data/code/Test/txt/every_layer_output{torch.cuda.current_device()}.txt", 
+            # f"/home/chenbeitao/data/code/Test/txt/every_layer_output_backup{torch.cuda.current_device()}.txt", 
+            f"/home/chenbeitao/data/code/Test/txt/every_layer_grad{torch.cuda.current_device()}.txt", 
+            # f"/home/chenbeitao/data/code/Test/txt/every_layer_grad_backup{torch.cuda.current_device()}.txt", 
+            np.array(self.every_layer_output)
+        )
         print(torch.cuda.current_device(), self.all_temp_layer_grad)
         print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         print(f'all grad : {all_grad}')
