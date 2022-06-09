@@ -282,6 +282,27 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self.log_buffer.update(outputs['log_vars'], outputs['num_samples'])
         self.outputs = outputs
 
+    # -----------------------------------------------------------------------------------------
+    def register_all_model(self):
+        for sub_module_tuple in self.model.module.named_children():
+            self.register_every_layer_hook(sub_module_tuple)
+        print('finish every layer hook')
+
+    def register_every_layer_hook(self, children_module):
+        if len(list(children_module[1].named_children())) == 0:
+            children_module[1].register_forward_hook(
+                lambda layer, input, output : print(output.shape, output.abs().sum())
+            )
+            children_module[1].register_backward_hook(
+                lambda layer, gin, gout : print(gout[0].abs().sum())
+            )
+            return 
+
+        for sub_module_tuple in children_module[1].named_children():
+            self.register_every_layer_hook(sub_module_tuple)
+        
+    # -----------------------------------------------------------------------------------------
+
     def train(self, data_loader, **kwargs):
         self.model.train()
         self.mode = 'train'
@@ -304,6 +325,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         os.environ['PYTHONHASHSEED'] = str(seed)
+        # self.register_every_layer_hook(self.model.module.named_children())
+        self.register_all_model()
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
             # print(i, '/', len(self.data_loader))
