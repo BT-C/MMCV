@@ -600,11 +600,13 @@ class EfficientSampleOptimizerHook(Hook):
             self.detect_anomalous_parameters(runner.outputs['loss'], runner)\
 
         # import torch
-        # gpu_id = torch.cuda.current_device()
-        # if gpu_id == 3:
-        #     import time 
-        #     time.sleep(10)
+        
         import torch
+        gpu_id = torch.cuda.current_device()
+        if gpu_id == 0:
+            import time 
+            print('-' *30, 'sleep')
+            time.sleep(10)
         
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
