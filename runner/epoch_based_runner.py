@@ -790,14 +790,37 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self.iter_every_layer_grad = []
             # self.every_layer_name = []
 
-            import torch.distributed as dist
-            communication_tensor = torch.ones((2, 2))
-            if torch.cuda.current_device() == 0:
-                print(torch.cuda.current_device(), ' broadcast!')
-                dist.broadcast(communication_tensor, src=0, async_op=True)
-            else:
-                print(torch.cuda.current_device(), ' wait to recv ')
-                dist.recv(communication_tensor, src=0)
+        import torch.distributed as dist
+        ROOT = 0
+        every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda()
+        self.every_layer_grad = []        
+        this_rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        # print(f'rank : {this_rank}, world_size : {world_size}')
+        communication_tensor = torch.zeros((1)).cuda()
+        grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
+        if torch.cuda.current_device() == 0:
+            # dist.gather(every_layer_grad, gather_list=grad_gather_list, dst=0)
+            dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
+            print('all grad from other gpu :', len(grad_gather_list))
+            print(grad_gather_list[0].shape)
+            all_grad_gather = torch.cat(grad_gather_list, dim=0)
+            print(all_grad_gather.shape)
+            # for j in range(len(grad_gather_list)):
+            #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
+            print(f'{this_rank} broadcast!')
+            print('sleep 20')
+            time.sleep(15)
+            dist.broadcast(communication_tensor, src=0)
+        else:
+            print(f'{this_rank} send every layer grad')
+            # dist.gather(every_layer_grad, dst=0)
+            dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
+            print(this_rank, ' wait to recv ')
+            dist.broadcast(communication_tensor, src=0)
+            print(f'{this_rank} received broadcast and finish gradent statistic')
+            
+            # dist.broadcast_multigpu()
 
         all_grad = 0
         for temp_grad in self.grad_result:
@@ -810,7 +833,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         #     np.array(all_layers_grad)
         # )
         
-        print(np.array(temp_record))
+        # print(np.array(temp_record))
         # np.savetxt(
         #     f"/home/chenbeitao/data/code/Test/txt/filename{torch.cuda.current_device()}.txt", 
         #     np.array(temp_record),
@@ -844,19 +867,19 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # )
 
 
-        print('every layer name :', len(self.every_layer_name), self.every_layer_name)
-        print('every layer grad :', len(self.every_layer_grad[0]), np.array(self.every_layer_grad).sum())
-        print('all layer grad : ', len(self.all_layer_grad), len(self.all_layer_grad[0]))
-        assert len(self.all_layer_grad[0]) == len(self.every_layer_grad[0])
-        a = np.array(self.all_layer_grad[0])
-        b = np.array(self.every_layer_grad[0])
+        # print('every layer name :', len(self.every_layer_name), self.every_layer_name)
+        # print('every layer grad :', len(self.every_layer_grad[0]), np.array(self.every_layer_grad).sum())
+        # print('all layer grad : ', len(self.all_layer_grad), len(self.all_layer_grad[0]))
+        # assert len(self.all_layer_grad[0]) == len(self.every_layer_grad[0])
+        # a = np.array(self.all_layer_grad[0])
+        # b = np.array(self.every_layer_grad[0])
 
-        print(a[::-1] - b)
-        print(a[::-1][:20])
-        print(b[:20])
+        # print(a[::-1] - b)
+        # print(a[::-1][:20])
+        # print(b[:20])
         # print(torch.cuda.current_device(), len(self.all_temp_layer_grad), self.all_temp_layer_grad)
         # print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
-        print(f'all grad : {all_grad}')
+        # print(f'all grad : {all_grad}')
 
         self.call_hook('after_train_epoch')
         self._epoch += 1
