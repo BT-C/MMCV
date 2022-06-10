@@ -287,6 +287,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
     def register_all_model(self):
         self.every_layer_output = []
         self.every_layer_grad = []
+        self.every_layer_name = []
+        self.iter_every_layer_grad = []
         for sub_module_tuple in self.model.module.named_children():
             self.register_every_layer_hook(sub_module_tuple)
         print('finish every layer hook')
@@ -298,26 +300,36 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # print(torch.cuda.current_device(), layer, gout[0].abs().sum().item())
             print(torch.cuda.current_device(), layer)
             for param in layer.parameters():
+                print(param.shape)
                 if param.grad is not None:
                     print(param.shape, param.grad.abs().sum().item())
             # self.every_layer_grad.append(gout[0].abs().sum().item())
+
+        def efficient_sample_grad_hook(grad):
+            # print('-' * 10, grad.shape, grad.abs().sum().item())
+            self.iter_every_layer_grad.append(grad.abs().sum().item())
 
         if len(list(children_module[1].named_children())) == 0:
             # children_module[1].register_forward_hook(
             #     # lambda layer, input, output : print(output.shape, output.abs().sum())
             #     lambda layer, input, output : self.every_layer_output.append(output.abs().sum().item())
             # )
-            children_module[1].register_backward_hook(
-                # lambda layer, gin, gout : print(gout[0].shape)
-                # lambda layer, gin, gout : print(gout[0].abs().sum().item())
-                # lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum().item())
-                # lambda layer, gin, gout : print(layer, type(layer), gout[0].abs().sum().item())
-                # lambda layer, gin, gout : print(type(layer), layer.requires_grad)
-                efficient_sample_backward_hook
-            )
 
+            # children_module[1].register_backward_hook(
+            #     # lambda layer, gin, gout : print(gout[0].shape)
+            #     # lambda layer, gin, gout : print(gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : print(layer, type(layer), gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : print(type(layer), layer.requires_grad)
+            #     efficient_sample_backward_hook
+            # )
+
+            self.every_layer_name.append(children_module[0])
+            for param in children_module[1].parameters():
+                param.register_hook(efficient_sample_grad_hook)
+                
             return 
-            
+
         for sub_module_tuple in children_module[1].named_children():
             self.register_every_layer_hook(sub_module_tuple)
         
@@ -329,6 +341,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.data_loader = data_loader
         self._max_iters = self._max_epochs * len(self.data_loader)
         self.all_layer_grad = []
+        self.every_layer_grad = []
 
         import numpy as np
         temp_record = []
@@ -339,6 +352,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
         import random
         import os
+        import copy
         seed = 0
         random.seed(seed)
         np.random.seed(seed)
@@ -393,31 +407,38 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self._iter += 1
             # print(torch.randn(2, 2))
             # ----------------------------------------------------------
-            # if i == ((len(self.data_loader) // 2) - 1):
+            if i == ((len(self.data_loader) // 2) - 1):
             # if i == 1:
-                # pass
-            if True:
+                pass
+            # if True:
             # if i == 4:
                 # pass
                 # from mmcv.runner import get_dist_info, init_dist, set_random_seed
                 # import random
                 # import os
                 # pass
-                seed = 0
-                random.seed(seed)
-                np.random.seed(seed)
-                torch.manual_seed(seed)
-                torch.cuda.manual_seed(seed)
-                # torch.cuda.manual_seed_all(seed)
-                os.environ['PYTHONHASHSEED'] = str(seed)
+                # seed = 0
+                # random.seed(seed)
+                # np.random.seed(seed)
+                # torch.manual_seed(seed)
+                # torch.cuda.manual_seed(seed)
+                # # torch.cuda.manual_seed_all(seed)
+                # os.environ['PYTHONHASHSEED'] = str(seed)
                 # # set_random_seed(seed)
             # if i == 10:
             #     break
             # ----------------------------------------------------------
+            # self.every_layer_output = []
+            
+            self.every_layer_grad.append(np.array(copy.deepcopy(self.iter_every_layer_grad)))
+            self.iter_every_layer_grad = []
+            # self.every_layer_name = []
+
 
         all_grad = 0
         for temp_grad in self.grad_result:
             all_grad += temp_grad
+        
 
         # all_layers_grad = np.array(self.all_layer_grad)
         # np.savetxt(
@@ -457,9 +478,13 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_grad_backup{torch.cuda.current_device()}.txt", 
         #     np.array(self.every_layer_grad)
         # )
+
+
+        print('every layer name :', len(self.every_layer_name), self.every_layer_name)
         print('every layer grad :', np.array(self.every_layer_grad).sum())
-        print(torch.cuda.current_device(), self.all_temp_layer_grad)
-        print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
+        print('all layer grad : ', len(self.all_layer_grad), len(self.all_layer_grad[0]))
+        # print(torch.cuda.current_device(), len(self.all_temp_layer_grad), self.all_temp_layer_grad)
+        # print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
         print(f'all grad : {all_grad}')
 
         self.call_hook('after_train_epoch')

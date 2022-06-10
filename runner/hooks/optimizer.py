@@ -603,10 +603,10 @@ class EfficientSampleOptimizerHook(Hook):
         
         import torch
         gpu_id = torch.cuda.current_device()
-        if gpu_id == 0:
-            import time 
-            print('-' *30, 'sleep')
-            time.sleep(10)
+        # if gpu_id == 0:
+        #     import time 
+        #     print('-' *30, 'sleep')
+        #     time.sleep(15)
         
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
@@ -616,6 +616,10 @@ class EfficientSampleOptimizerHook(Hook):
         # print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
 
         runner.outputs['loss'].backward()
+        # if gpu_id == 0:
+        #     import time 
+        #     print('after backward ', '-'* 30, 'sleep')
+        #     time.sleep(10)
 
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
@@ -717,14 +721,15 @@ class EfficientSampleOptimizerHook(Hook):
             temp_layer_grad = []
             # print(runner.model.device, torch.cuda.current_device(), 'loss :', runner.outputs['loss'])
             for name, parameters in runner.model.module.named_parameters():
-                
+                # print(gpu_id, name, parameters.shape)
                 # param_dict[name]=parameters
                 # if 'bn' in name:
                 #     print('*'*100, name)
                 if (parameters.grad is None) or ('bn' in name):
-                    # print(name, 'None')
+                    print(gpu_id, name, 'None')
+                    # print(parameters.requires_grad)
                     continue
-                print(gpu_id, name, parameters.grad.abs().sum().item())
+                print(gpu_id, name, parameters.grad.shape, parameters.grad.abs().sum().item())
                 temp_all_grad.append(parameters.grad.abs().sum().item())
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()
@@ -735,6 +740,18 @@ class EfficientSampleOptimizerHook(Hook):
                 else:
                     if parameters.grad is not None:
                         grad_stages[0] += parameters.grad.abs().sum().item()
+
+            # for parameters in runner.model.module.parameters():
+            #     print(gpu_id, parameters.shape)
+            #     # param_dict[name]=parameters
+            #     # if 'bn' in name:
+            #     #     print('*'*100, name)
+            #     if (parameters.grad is None) or ('bn' in name):
+            #         # print(name, 'None')
+            #         print(parameters.requires_grad)
+            #         continue
+            #     print(gpu_id, parameters.grad.shape, parameters.grad.abs().sum().item())
+                
             
             # print('gpu_id : ', gpu_id, 'loss :', runner.outputs['loss'], grad_stages)
             # print(len(temp_all_grad))
