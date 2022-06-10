@@ -559,6 +559,257 @@ else:
 
 # ======================================================================================
 @HOOKS.register_module()
+class EfficientSampleOptimizerHookDebug(Hook):
+    """A hook contains custom operations for the optimizer.
+
+    Args:
+        grad_clip (dict, optional): A config dict to control the clip_grad.
+            Default: None.
+        detect_anomalous_params (bool): This option is only used for
+            debugging which will slow down the training speed.
+            Detect anomalous parameters that are not included in
+            the computational graph with `loss` as the root.
+            There are two cases
+
+                - Parameters were not used during
+                  forward pass.
+                - Parameters were not used to produce
+                  loss.
+            Default: False.
+    """
+
+    def __init__(self, grad_clip=None, detect_anomalous_params=False):
+        self.grad_clip = grad_clip
+        self.detect_anomalous_params = detect_anomalous_params
+
+    def clip_grads(self, params):
+        params = list(
+            filter(lambda p: p.requires_grad and p.grad is not None, params))
+        if len(params) > 0:
+            return clip_grad.clip_grad_norm_(params, **self.grad_clip)
+
+    def before_train_epoch(self, runner):
+        pass
+
+    def fileter_function(self, runner):
+        return False
+
+    def after_train_iter(self, runner):
+        runner.optimizer.zero_grad()
+        if self.detect_anomalous_params:
+            self.detect_anomalous_parameters(runner.outputs['loss'], runner)\
+
+        # import torch
+        
+        import torch
+        gpu_id = torch.cuda.current_device()
+        if gpu_id == 0:
+            import time 
+            print('-' *30, 'sleep')
+            time.sleep(15)
+        
+        model_weight = 0
+        for name, parameters in runner.model.module.named_parameters():
+            if parameters is None:
+                continue
+            model_weight += parameters.abs().sum().item()
+        # print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
+
+        runner.outputs['loss'].backward()
+        if gpu_id == 0:
+            import time 
+            print('after backward ', '-'* 30, 'sleep')
+            time.sleep(10)
+
+        model_weight = 0
+        for name, parameters in runner.model.module.named_parameters():
+            if parameters is None:
+                continue
+            model_weight += parameters.abs().sum().item()
+        # print('after backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
+        # print('over backward')
+        # for name, parameters in runner.model.module.named_parameters():
+        #     print('-'*20, parameters.grad.mean())
+        #     break
+
+        if self.grad_clip is not None:
+            grad_norm = self.clip_grads(runner.model.parameters())
+            if grad_norm is not None:
+                # Add grad norm to the logger
+                runner.log_buffer.update({'grad_norm': float(grad_norm)},
+                                         runner.outputs['num_samples'])
+
+        # if runner.epoch % 10 != 0:
+        if self.fileter_function(runner):
+            runner.optimizer.step()
+        else:
+            '''
+            backbone.conv1.weight
+            backbone.bn1.weight
+            backbone.bn1.bias
+            backbone.bn1.running_mean
+            backbone.bn1.running_var
+            backbone.bn1.num_batches_tracked
+            backbone.conv2.weight
+            backbone.bn2.weight
+            backbone.bn2.bias
+            backbone.bn2.running_mean
+            backbone.bn2.running_var
+            backbone.bn2.num_batches_tracked
+            backbone.layer1.0.conv1.weight
+            backbone.layer1.0.bn1.weight
+            backbone.layer1.0.bn1.bias
+            backbone.layer1.0.bn1.running_mean
+            backbone.layer1.0.bn1.running_var
+            backbone.layer1.0.bn1.num_batches_tracked
+            backbone.layer1.0.conv2.weight
+            backbone.layer1.0.bn2.weight
+            backbone.layer1.0.bn2.bias
+            backbone.layer1.0.bn2.running_mean
+            backbone.layer1.0.bn2.running_var
+            backbone.layer1.0.bn2.num_batches_tracked
+            backbone.layer1.0.conv3.weight
+            backbone.layer1.0.bn3.weight
+            backbone.transition1.0.0.weight
+            backbone.transition1.0.1.weight
+            backbone.transition1.0.1.bias
+            .
+            .
+            backbone.stage2.0.fuse_layers.1.0.0.1.running_var
+            backbone.stage2.0.fuse_layers.1.0.0.1.num_batches_tracked
+            backbone.transition2.2.0.0.weight
+            backbone.transition2.2.0.1.weight
+            backbone.transition2.2.0.1.bias
+            .
+            .
+            backbone.stage2.0.fuse_layers.1.0.0.0.weight torch.Size([64, 32, 3, 3])
+            backbone.stage2.0.fuse_layers.1.0.0.1.weight torch.Size([64])
+            backbone.stage2.0.fuse_layers.1.0.0.1.bias torch.Size([64])
+            backbone.transition2.2.0.0.weight torch.Size([128, 64, 3, 3])
+            backbone.transition2.2.0.1.weight torch.Size([128])
+            backbone.transition2.2.0.1.bias torch.Size([128])
+            backbone.stage3.0.branches.0.0.conv1.weight torch.Size([32, 32, 3, 3])
+            backbone.stage3.0.branches.0.0.bn1.weight torch.Size([32])
+            .
+            .
+            backbone.stage3.3.fuse_layers.2.1.0.1.bias torch.Size([128])
+            backbone.transition3.3.0.0.weight torch.Size([256, 128, 3, 3])
+            backbone.transition3.3.0.1.weight torch.Size([256])
+            backbone.transition3.3.0.1.bias torch.Size([256])
+            backbone.stage4.0.branches.0.0.conv1.weight torch.Size([32, 32, 3, 3])
+            backbone.stage4.0.branches.0.0.bn1.weight torch.Size([32])
+            backbone.stage4.0.branches.0.0.bn1.bias torch.Size([32])
+            .
+            .
+            backbone.stage4.2.fuse_layers.0.3.0.weight torch.Size([32, 256, 1, 1])
+            backbone.stage4.2.fuse_layers.0.3.1.weight torch.Size([32])
+            backbone.stage4.2.fuse_layers.0.3.1.bias torch.Size([32])
+            keypoint_head.final_layer.weight torch.Size([17, 32, 1, 1])
+            keypoint_head.final_layer.bias torch.Size([17])
+            '''
+            import torch
+            param_dict = {}
+            grad_stages = [0 for i in range(4)]
+            # grad_stages = {
+            #     0 : [0 for i in range(4)],
+            #     1 : [0 for i in range(4)],
+            #     2 : [0 for i in range(4)],
+            #     3 : [0 for i in range(4)],
+            # }
+            gpu_id = torch.cuda.current_device()
+            temp_all_grad = []
+            temp_layer_grad = []
+            # print(runner.model.device, torch.cuda.current_device(), 'loss :', runner.outputs['loss'])
+            for name, parameters in runner.model.module.named_parameters():
+                # print(gpu_id, name, parameters.shape)
+                # param_dict[name]=parameters
+                # if 'bn' in name:
+                #     print('*'*100, name)
+                # if (parameters.grad is None) or ('bn' in name):
+                if (parameters.grad is None):
+                    print(gpu_id, name, 'None')
+                    # print(parameters.requires_grad)
+                    continue
+                print(gpu_id, name, parameters.grad.shape, parameters.grad.abs().sum().item())
+                temp_all_grad.append(parameters.grad.abs().sum().item())
+                if ('stage4' in name) or ('final_layer' in name):
+                    grad_stages[3] += parameters.grad.abs().sum().item()
+                elif ('stage3' in name) or ('transition3' in name):
+                    grad_stages[2] += parameters.grad.abs().sum().item()
+                elif ('stage2' in name) or ('transition2' in name):
+                    grad_stages[1] += parameters.grad.abs().sum().item()
+                else:
+                    if parameters.grad is not None:
+                        grad_stages[0] += parameters.grad.abs().sum().item()
+
+            # for parameters in runner.model.module.parameters():
+            #     # print(gpu_id, parameters.shape)
+            #     # param_dict[name]=parameters
+            #     # if 'bn' in name:
+            #     #     print('*'*100, name)
+            #     if (parameters.grad is None) or ('bn' in name):
+            #         # print(name, 'None')
+            #         print(parameters.requires_grad)
+            #         continue
+            #     print(gpu_id, parameters.grad.shape, parameters.grad.abs().sum().item())
+                
+            
+            # print('gpu_id : ', gpu_id, 'loss :', runner.outputs['loss'], grad_stages)
+            # print(len(temp_all_grad))
+            import numpy as np
+            # np.savetxt("/home/chenbeitao/data/code/Test/txt/result.txt", np.array(temp_all_grad))
+            runner.all_layer_grad.append(np.array(temp_all_grad))
+            runner.all_temp_layer_grad.append(np.array(grad_stages))
+            
+            # if (np.array(grad_stages) > np.array([0.09304577, 0.05629569, 0.6235519 , 1.6534002])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.09979996, 0.06050889, 0.67000383, 1.7848371])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.3793958 , 0.01894367, 0.19144724, 0.99496942])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.43092558, 0.02166538, 0.21900302, 1.13392802])).sum() == 4:
+            # if (np.array(grad_stages) > np.array([0.98959535, 0.48403644, 4.40175368, 5.35036675])).sum() == 4:
+
+            # if (np.array(grad_stages) > np.array([ 5.38665474,  2.62785841, 23.74116398, 30.01025121])).sum() == 4:
+            #     import os
+            #     print(len(runner.image_meta))
+            #     for j in range(len(runner.image_meta)):
+            #         image_name = runner.image_meta[j]['image_file']
+            #         os.popen(f'cp {os.path.join("/home/chenbeitao/data/code/mmlab/mmpose", image_name)} {os.path.join("/home/chenbeitao/data/code/Test/grad_image/higher/train-trained-model", image_name.split("/")[-1])}')
+            #         print(image_name)
+            # print(gpu_id, grad_stages)
+            for j in range(len(grad_stages)):
+                runner.grad_result[j] += grad_stages[j]
+        
+        
+
+    def detect_anomalous_parameters(self, loss, runner):
+        logger = runner.logger
+        parameters_in_graph = set()
+        visited = set()
+
+        def traverse(grad_fn):
+            if grad_fn is None:
+                return
+            if grad_fn not in visited:
+                visited.add(grad_fn)
+                if hasattr(grad_fn, 'variable'):
+                    parameters_in_graph.add(grad_fn.variable)
+                parents = grad_fn.next_functions
+                if parents is not None:
+                    for parent in parents:
+                        grad_fn = parent[0]
+                        traverse(grad_fn)
+
+        traverse(loss.grad_fn)
+        for n, p in runner.model.named_parameters():
+            if p not in parameters_in_graph and p.requires_grad:
+                logger.log(
+                    level=logging.ERROR,
+                    msg=f'{n} with shape {p.size()} is not '
+                    f'in the computational graph \n')
+
+    
+
+
+@HOOKS.register_module()
 class EfficientSampleOptimizerHook(Hook):
     """A hook contains custom operations for the optimizer.
 
@@ -725,11 +976,12 @@ class EfficientSampleOptimizerHook(Hook):
                 # param_dict[name]=parameters
                 # if 'bn' in name:
                 #     print('*'*100, name)
-                if (parameters.grad is None) or ('bn' in name):
-                    print(gpu_id, name, 'None')
+                # if (parameters.grad is None) or ('bn' in name):
+                if (parameters.grad is None):
+                    # print(gpu_id, name, 'None')
                     # print(parameters.requires_grad)
                     continue
-                print(gpu_id, name, parameters.grad.shape, parameters.grad.abs().sum().item())
+                # print(gpu_id, name, parameters.grad.shape, parameters.grad.abs().sum().item())
                 temp_all_grad.append(parameters.grad.abs().sum().item())
                 if ('stage4' in name) or ('final_layer' in name):
                     grad_stages[3] += parameters.grad.abs().sum().item()
@@ -742,7 +994,7 @@ class EfficientSampleOptimizerHook(Hook):
                         grad_stages[0] += parameters.grad.abs().sum().item()
 
             # for parameters in runner.model.module.parameters():
-            #     print(gpu_id, parameters.shape)
+            #     # print(gpu_id, parameters.shape)
             #     # param_dict[name]=parameters
             #     # if 'bn' in name:
             #     #     print('*'*100, name)
