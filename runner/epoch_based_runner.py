@@ -809,9 +809,13 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             mean = all_grad_gather.mean(dim=0)
             # var = all_grad_gather.var(dim=0)
             # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
+            out_all_grad_gather = all_grad_gather.cpu().numpy()
+            np.savetxt(
+                f"/home/chenbeitao/data/code/Test/txt/out_result{torch.cuda.current_device()}.txt", 
+                out_all_grad_gather
+            )
             choose_index = ((all_grad_gather > mean * self.epoch / self._max_epochs).sum(dim=1) == all_grad_gather.shape[1])
             print('choose number : ', choose_index.sum())
-
 
             print(all_grad_gather.shape)
             # for j in range(len(grad_gather_list)):
