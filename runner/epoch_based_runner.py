@@ -721,43 +721,53 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # for i, data_batch in enumerate(self.data_loader):
         for i, data_batch in enumerate(self.train_data_loader[-1]):
             self._inner_iter = i
-            # print(i, '/', len(self.data_loader))
+            print('gpu_id', torch.cuda.current_device(), i, '/', len(self.data_loader), end='\r')
             # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
 
             image_meta = data_batch['img_metas'].data[0]
-            temp_img_ids = np.array([image_meta[j]['img_id'] for j in range(len(image_meta))])
+            batch_size = kwargs['cfg'].data.train_dataloader['samples_per_gpu']
+            temp_img_ids = [image_meta[j]['img_id'] for j in range(len(image_meta))]
+            if len(temp_img_ids) <batch_size:
+                add_item = temp_img_ids[-1]
+                temp_length = len(temp_img_ids)
+                for _ in range(batch_size - len(temp_img_ids)):
+                    temp_img_ids.append(add_item)
+            assert len(temp_img_ids) == batch_size
+            temp_img_ids = np.array(temp_img_ids)
+
+
             self.all_img_ids.append(temp_img_ids)
 
-            temp_name = []
-            temp_name.append(str(i))
-            for j in range(len(image_meta)):
-                # print(image_meta[0][j]['image_file'])
-                temp_name.append(image_meta[j]['image_file'].split('/')[-1])
-            self.image_meta = data_batch['img_metas'].data[0]
+            # temp_name = []
+            # temp_name.append(str(i))
+            # for j in range(len(image_meta)):
+            #     # print(image_meta[0][j]['image_file'])
+            #     temp_name.append(image_meta[j]['image_file'].split('/')[-1])
+            # self.image_meta = data_batch['img_metas'].data[0]
             
             # print(data_batch['img_metas'].data[0][0]['image_file'])
-            temp_record.append(np.array([
-                i, len(self.data_loader), torch.cuda.current_device(),
-                data_batch['img'].abs().sum().item()
-                # *temp_name
-            ]))
+            # temp_record.append(np.array([
+            #     i, len(self.data_loader), torch.cuda.current_device(),
+            #     data_batch['img'].abs().sum().item()
+            #     # *temp_name
+            # ]))
             
             self.call_hook('before_train_iter')
             # ------------------------------------------------------------
             model_weight = 0
-            for name, parameters in self.model.module.named_parameters():
-                if parameters is None:
-                    continue
-                model_weight += parameters.abs().sum().item()
+            # for name, parameters in self.model.module.named_parameters():
+            #     if parameters is None:
+            #         continue
+            #     model_weight += parameters.abs().sum().item()
             # print('gpu_id : ', torch.cuda.current_device(), model_weight)
             # ------------------------------------------------------------
 
             self.run_iter(data_batch, train_mode=True, **kwargs)
             self.call_hook('after_train_iter')
             # print(self.all_temp_layer_grad)
-            t = self.all_temp_layer_grad[-1].tolist()
-            t.append(data_batch['img'].abs().sum().item())
-            self.all_temp_layer_grad[-1] = np.array(t)
+            # t = self.all_temp_layer_grad[-1].tolist()
+            # t.append(data_batch['img'].abs().sum().item())
+            # self.all_temp_layer_grad[-1] = np.array(t)
 
             self._iter += 1
             # print(torch.randn(2, 2))
@@ -785,14 +795,14 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # ----------------------------------------------------------
             # self.every_layer_output = []
             
-            self.every_layer_grad.append(np.array(copy.deepcopy(self.iter_every_layer_grad)))
+            self.every_layer_grad.append(np.array(self.iter_every_layer_grad))
             self.iter_every_layer_grad = []
             # self.every_layer_name = []
 
         import torch.distributed as dist
         ROOT = 0
         every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
-        all_img_ids = torch.from_numpy(np.array(self.all_img_ids)).cuda()   # (N/batch_size/world_size, batch_size)
+        all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
         assert all_img_ids.shape[0] == every_layer_grad.shape[0]
 
         self.every_layer_grad = []        
@@ -817,11 +827,11 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             mean = all_grad_gather.mean(dim=0)
             # var = all_grad_gather.var(dim=0)
             # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
-            out_all_grad_gather = all_grad_gather.cpu().numpy()
-            np.savetxt(
-                f"/home/chenbeitao/data/code/Test/txt/out_result{torch.cuda.current_device()}.txt", 
-                out_all_grad_gather
-            )
+            # out_all_grad_gather = all_grad_gather.cpu().numpy()
+            # np.savetxt(
+            #     f"/home/chenbeitao/data/code/Test/txt/out_result{torch.cuda.current_device()}.txt", 
+            #     out_all_grad_gather
+            # )
             choose_index = ((all_grad_gather > mean * (1 + self.epoch / self._max_epochs)).sum(dim=1) > all_grad_gather.shape[1]/2)
             choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
             img_ids_set = set()
