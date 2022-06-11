@@ -718,7 +718,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         os.environ['PYTHONHASHSEED'] = str(seed)
         # self.register_every_layer_hook(self.model.module.named_children())
         self.register_all_model()
-        for i, data_batch in enumerate(self.data_loader):
+        # for i, data_batch in enumerate(self.data_loader):
+        for i, data_batch in enumerate(self.train_data_loader[-1]):
             self._inner_iter = i
             # print(i, '/', len(self.data_loader))
             # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
@@ -727,8 +728,6 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             temp_img_ids = np.array([image_meta[j]['img_id'] for j in range(len(image_meta))])
             self.all_img_ids.append(temp_img_ids)
 
-            
-            
             temp_name = []
             temp_name.append(str(i))
             for j in range(len(image_meta)):
@@ -807,7 +806,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         print(f'{this_rank} send every layer grad')
         dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
         dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
-        if torch.cuda.current_device() == 0:
+        if this_rank == 0:
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
 
@@ -828,22 +827,42 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             img_ids_set = set()
             img_ids_set.update(choose_img_ids)
             img_ids = list(img_ids_set)
+
             from pycocotools.coco import COCO
+            import json
+            from mmpose.datasets import build_dataloader, build_dataset
             coco = COCO(kwargs['cfg'].data.train['ann_file'])
             cat_ids = coco.getCatIds(catNms=['person'])
             img_list = coco.loadImgs(ids=img_ids)
+            final_ann = {
+                'images' : [],
+                'annotations' : [],
+                'categories' : json.load(open(kwargs['cfg'].data.train['ann_file']))['categories'],
+            }
             for j, img in enumerate(img_list):
                 ann_ids = coco.getAnnIds(imgIds=img['id'], catIds=cat_ids)
-                anns = coco.loadAnns(ids=ann_ids)
+                ann_list = coco.loadAnns(ids=ann_ids)
+                final_ann['images'].append(img)
+                final_ann['annotations'].extend(ann_list)
 
-            print('choose number : ', choose_index.sum())
+            target_file_path = os.path.join(
+                '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'temp_keypoints_train.json'
+            )
+            with open(target_file_path, 'w') as fd:
+                json.dump(final_ann, fd)
+            new_train_cfg = copy.deepcopy(kwargs['cfg'].data.train)
+            new_train_cfg['ann_file'] = 'data/temp-coco/train/temp_keypoints_train.json'
+            train_loader_cfg = kwargs['train_loader_cfg']
+            new_datasets = build_dataset(new_train_cfg)
+            new_data_loaders = build_dataloader(new_datasets, **train_loader_cfg)
+            self.train_data_loader.append(new_data_loaders)
+
+            print('choose number : ', choose_index.sum().item())
 
             print(all_grad_gather.shape)
             # for j in range(len(grad_gather_list)):
             #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
             print(f'{this_rank} broadcast!')
-            print('sleep 20')
-            time.sleep(15)
             dist.broadcast(communication_tensor, src=0)
         else:
             print(this_rank, ' wait to recv ')
@@ -856,61 +875,6 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         for temp_grad in self.grad_result:
             all_grad += temp_grad
         
-
-        # all_layers_grad = np.array(self.all_layer_grad)
-        # np.savetxt(
-        #     f"/home/chenbeitao/data/code/Test/txt/result{torch.cuda.current_device()}.txt", 
-        #     np.array(all_layers_grad)
-        # )
-        
-        # print(np.array(temp_record))
-        # np.savetxt(
-        #     f"/home/chenbeitao/data/code/Test/txt/filename{torch.cuda.current_device()}.txt", 
-        #     np.array(temp_record),
-        #     '%s'
-        # )
-        # np.savetxt(
-        #     f"/home/chenbeitao/data/code/Test/txt/seed_batch{torch.cuda.current_device()}.txt", 
-        #     np.array(temp_record),
-        # )
-
-        # np.savetxt(
-        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad{torch.cuda.current_device()}.txt", 
-        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_backup{torch.cuda.current_device()}.txt", 
-        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup.txt", 
-        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_backup_DISABLE_NCCL.txt", 
-        #     np.array(self.all_temp_layer_grad)
-        # )
-        
-        # np.savetxt(
-        #     # f"/home/chenbeitao/data/code/Test/txt/all_grad_higher_backup{torch.cuda.current_device()}.txt", 
-        #     f"/home/chenbeitao/data/code/Test/txt/all_grad_higher{torch.cuda.current_device()}.txt", 
-        #     np.array(self.all_temp_layer_grad)
-        # )
-
-        # np.savetxt(
-        #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_output{torch.cuda.current_device()}.txt", 
-        #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_output_backup{torch.cuda.current_device()}.txt", 
-        #     f"/home/chenbeitao/data/code/Test/txt/every_layer_grad{torch.cuda.current_device()}.txt", 
-        #     # f"/home/chenbeitao/data/code/Test/txt/every_layer_grad_backup{torch.cuda.current_device()}.txt", 
-        #     np.array(self.every_layer_grad)
-        # )
-
-
-        # print('every layer name :', len(self.every_layer_name), self.every_layer_name)
-        # print('every layer grad :', len(self.every_layer_grad[0]), np.array(self.every_layer_grad).sum())
-        # print('all layer grad : ', len(self.all_layer_grad), len(self.all_layer_grad[0]))
-        # assert len(self.all_layer_grad[0]) == len(self.every_layer_grad[0])
-        # a = np.array(self.all_layer_grad[0])
-        # b = np.array(self.every_layer_grad[0])
-
-        # print(a[::-1] - b)
-        # print(a[::-1][:20])
-        # print(b[:20])
-        # print(torch.cuda.current_device(), len(self.all_temp_layer_grad), self.all_temp_layer_grad)
-        # print(f'total sample : {len(self.data_loader)}, grad result : {self.grad_result}')
-        # print(f'all grad : {all_grad}')
-
         self.call_hook('after_train_epoch')
         self._epoch += 1
 
@@ -968,6 +932,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                          self._max_epochs)
         self.call_hook('before_run')
 
+        self.train_data_loader = data_loaders
         while self.epoch < self._max_epochs:
             for i, flow in enumerate(workflow):
                 mode, epochs = flow
@@ -987,6 +952,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                         break
                     kwargs['epoch'] = self.epoch
                     kwargs['cfg'] = cfg
+                    kwargs['train_loader_cfg'] = train_loader_cfg
                     epoch_runner(data_loaders[i], **kwargs)
 
         time.sleep(1)  # wait for some hooks like loggers to finish
