@@ -843,22 +843,16 @@ class EfficientSampleOptimizerHook(Hook):
         pass
 
     def fileter_function(self, runner):
-        return False
+        # if runner._epoch > 0 and runner._epoch % 10 == 0:
+        #     return False
+        # return True
+        return runner.cal_grad
 
     def after_train_iter(self, runner):
         runner.optimizer.zero_grad()
         if self.detect_anomalous_params:
             self.detect_anomalous_parameters(runner.outputs['loss'], runner)\
 
-        # import torch
-        
-        import torch
-        gpu_id = torch.cuda.current_device()
-        # if gpu_id == 0:
-        #     import time 
-        #     print('-' *30, 'sleep')
-        #     time.sleep(15)
-        
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
             if parameters is None:
@@ -867,11 +861,7 @@ class EfficientSampleOptimizerHook(Hook):
         # print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
 
         runner.outputs['loss'].backward()
-        # if gpu_id == 0:
-        #     import time 
-        #     print('after backward ', '-'* 30, 'sleep')
-        #     time.sleep(10)
-
+        
         model_weight = 0
         for name, parameters in runner.model.module.named_parameters():
             if parameters is None:

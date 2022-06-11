@@ -721,7 +721,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # for i, data_batch in enumerate(self.data_loader):
         for i, data_batch in enumerate(self.train_data_loader[-1]):
             self._inner_iter = i
-            print('gpu_id', torch.cuda.current_device(), i, '/', len(self.data_loader), end='\r')
+            print('gpu_id', torch.cuda.current_device(), i, '/', len(self.train_data_loader[-1]), end='\r')
             # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
 
             image_meta = data_batch['img_metas'].data[0]
@@ -799,6 +799,27 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             self.iter_every_layer_grad = []
             # self.every_layer_name = []
 
+        all_grad = 0
+        for temp_grad in self.grad_result:
+            all_grad += temp_grad
+        
+        self.call_hook('after_train_epoch')
+        self._epoch += 1
+        block_epoch = 10
+        if self._epoch > 0 and self._epoch % block_epoch == 0:
+            self.train_data_loader = [self.train_data_loader[0]]
+            self.cal_grad = False
+        elif self._epoch % block_epoch == 1:
+            if self.cal_grad is None or self.cal_grad == False:
+                self.pick_grad_dataset(kwargs)
+                self._epoch -= 1
+                self.cal_grad = True
+        print('Epoch : ', self._epoch, self.cal_grad)
+        
+                
+    def pick_grad_dataset(self, kwargs):
+        import os
+        import numpy as np
         import torch.distributed as dist
         ROOT = 0
         every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
@@ -813,6 +834,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         communication_tensor = torch.zeros((1)).cuda()
         grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
         imgids_gather_list = [torch.zeros_like(all_img_ids) for _ in range(world_size)]
+        broadcast_tensor = torch.tensor([this_rank], dtype=torch.int32).cuda()
+        broadcast_list = [torch.zeros_like(broadcast_tensor) for _ in range(world_size)]
         print(f'{this_rank} send every layer grad')
         dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
         dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
@@ -840,7 +863,6 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
             from pycocotools.coco import COCO
             import json
-            from mmpose.datasets import build_dataloader, build_dataset
             coco = COCO(kwargs['cfg'].data.train['ann_file'])
             cat_ids = coco.getCatIds(catNms=['person'])
             img_list = coco.loadImgs(ids=img_ids)
@@ -860,33 +882,34 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             )
             with open(target_file_path, 'w') as fd:
                 json.dump(final_ann, fd)
-            new_train_cfg = copy.deepcopy(kwargs['cfg'].data.train)
-            new_train_cfg['ann_file'] = 'data/temp-coco/train/temp_keypoints_train.json'
-            train_loader_cfg = kwargs['train_loader_cfg']
-            new_datasets = build_dataset(new_train_cfg)
-            new_data_loaders = build_dataloader(new_datasets, **train_loader_cfg)
-            self.train_data_loader.append(new_data_loaders)
-
+            
             print('choose number : ', choose_index.sum().item())
 
             print(all_grad_gather.shape)
             # for j in range(len(grad_gather_list)):
             #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
+            
+            # print('-'*100, 'sleep 30')
+            # time.sleep(30)
+            # dist.broadcast(communication_tensor, src=0, async_op=False)
+            dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
             print(f'{this_rank} broadcast!')
-            dist.broadcast(communication_tensor, src=0)
         else:
             print(this_rank, ' wait to recv ')
-            dist.broadcast(communication_tensor, src=0)
+            # dist.broadcast(communication_tensor, src=0, async_op=False)
+            dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
             print(f'{this_rank} received broadcast and finish gradent statistic')
-            
-            # dist.broadcast_multigpu()
-
-        all_grad = 0
-        for temp_grad in self.grad_result:
-            all_grad += temp_grad
         
-        self.call_hook('after_train_epoch')
-        self._epoch += 1
+        print(f'GPU {this_rank} epoch :{self._epoch}', broadcast_list)
+
+        from mmpose.datasets import build_dataloader, build_dataset
+        import copy
+        new_train_cfg = copy.deepcopy(kwargs['cfg'].data.train)
+        new_train_cfg['ann_file'] = 'data/temp-coco/train/temp_keypoints_train.json'
+        train_loader_cfg = kwargs['train_loader_cfg']
+        new_datasets = build_dataset(new_train_cfg)
+        new_data_loaders = build_dataloader(new_datasets, **train_loader_cfg)
+        self.train_data_loader.append(new_data_loaders)
 
     @torch.no_grad()
     def val(self, data_loader, **kwargs):
@@ -943,6 +966,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.call_hook('before_run')
 
         self.train_data_loader = data_loaders
+        self.cal_grad = True
         while self.epoch < self._max_epochs:
             for i, flow in enumerate(workflow):
                 mode, epochs = flow
