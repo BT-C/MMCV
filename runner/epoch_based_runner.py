@@ -799,12 +799,20 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # print(f'rank : {this_rank}, world_size : {world_size}')
         communication_tensor = torch.zeros((1)).cuda()
         grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
+        print(f'{this_rank} send every layer grad')
+        dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
         if torch.cuda.current_device() == 0:
-            # dist.gather(every_layer_grad, gather_list=grad_gather_list, dst=0)
-            dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
-            all_grad_gather = torch.cat(grad_gather_list, dim=0)
+
+            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878)
+            mean = all_grad_gather.mean(dim=0)
+            # var = all_grad_gather.var(dim=0)
+            # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
+            choose_index = ((all_grad_gather > mean * self.epoch / self._max_epochs).sum(dim=1) == all_grad_gather.shape[1])
+            print('choose number : ', choose_index.sum())
+
+
             print(all_grad_gather.shape)
             # for j in range(len(grad_gather_list)):
             #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
@@ -813,9 +821,6 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             time.sleep(15)
             dist.broadcast(communication_tensor, src=0)
         else:
-            print(f'{this_rank} send every layer grad')
-            # dist.gather(every_layer_grad, dst=0)
-            dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
             print(this_rank, ' wait to recv ')
             dist.broadcast(communication_tensor, src=0)
             print(f'{this_rank} received broadcast and finish gradent statistic')
