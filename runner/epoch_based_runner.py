@@ -698,6 +698,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self._max_iters = self._max_epochs * len(self.data_loader)
         self.all_layer_grad = []
         self.every_layer_grad = []
+        self.all_img_ids = []
 
         import numpy as np
         temp_record = []
@@ -720,20 +721,19 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         for i, data_batch in enumerate(self.data_loader):
             self._inner_iter = i
             # print(i, '/', len(self.data_loader))
-            # print(len(self.data_loader))
-            # print(self.model.device)
             # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
-            # print(type(data_batch))
 
-            # print(type(data_batch['img_metas'].data))
-            image_meta = data_batch['img_metas'].data
-            # print(len(image_meta))
-            # print(len(image_meta[0]))
+            image_meta = data_batch['img_metas'].data[0]
+            temp_img_ids = np.array([image_meta[j]['img_id'] for j in range(len(image_meta))])
+            self.all_img_ids.append(temp_img_ids)
+
+            
+            
             temp_name = []
             temp_name.append(str(i))
-            for j in range(len(image_meta[0])):
+            for j in range(len(image_meta)):
                 # print(image_meta[0][j]['image_file'])
-                temp_name.append(image_meta[0][j]['image_file'].split('/')[-1])
+                temp_name.append(image_meta[j]['image_file'].split('/')[-1])
             self.image_meta = data_batch['img_metas'].data[0]
             
             # print(data_batch['img_metas'].data[0][0]['image_file'])
@@ -792,20 +792,29 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
         import torch.distributed as dist
         ROOT = 0
-        every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda()
+        every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
+        all_img_ids = torch.from_numpy(np.array(self.all_img_ids)).cuda()   # (N/batch_size/world_size, batch_size)
+        assert all_img_ids.shape[0] == every_layer_grad.shape[0]
+
         self.every_layer_grad = []        
+        self.all_img_ids = []
         this_rank = dist.get_rank()
         world_size = dist.get_world_size()
         # print(f'rank : {this_rank}, world_size : {world_size}')
         communication_tensor = torch.zeros((1)).cuda()
         grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
+        imgids_gather_list = [torch.zeros_like(all_img_ids) for _ in range(world_size)]
         print(f'{this_rank} send every layer grad')
         dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
+        dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
         if torch.cuda.current_device() == 0:
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
 
-            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878)
+            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
+            all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
+            assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
+
             mean = all_grad_gather.mean(dim=0)
             # var = all_grad_gather.var(dim=0)
             # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
@@ -814,7 +823,19 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 f"/home/chenbeitao/data/code/Test/txt/out_result{torch.cuda.current_device()}.txt", 
                 out_all_grad_gather
             )
-            choose_index = ((all_grad_gather > mean * self.epoch / self._max_epochs).sum(dim=1) == all_grad_gather.shape[1])
+            choose_index = ((all_grad_gather > mean * (1 + self.epoch / self._max_epochs)).sum(dim=1) > all_grad_gather.shape[1]/2)
+            choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
+            img_ids_set = set()
+            img_ids_set.update(choose_img_ids)
+            img_ids = list(img_ids_set)
+            from pycocotools.coco import COCO
+            coco = COCO(kwargs['cfg'].data.train['ann_file'])
+            cat_ids = coco.getCatIds(catNms=['person'])
+            img_list = coco.loadImgs(ids=img_ids)
+            for j, img in enumerate(img_list):
+                ann_ids = coco.getAnnIds(imgIds=img['id'], catIds=cat_ids)
+                anns = coco.loadAnns(ids=ann_ids)
+
             print('choose number : ', choose_index.sum())
 
             print(all_grad_gather.shape)
@@ -965,6 +986,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                     if mode == 'train' and self.epoch >= self._max_epochs:
                         break
                     kwargs['epoch'] = self.epoch
+                    kwargs['cfg'] = cfg
                     epoch_runner(data_loaders[i], **kwargs)
 
         time.sleep(1)  # wait for some hooks like loggers to finish
