@@ -721,14 +721,14 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # for i, data_batch in enumerate(self.data_loader):
         for i, data_batch in enumerate(self.train_data_loader[-1]):
             self._inner_iter = i
-            print('gpu_id', torch.cuda.current_device(), i, '/', len(self.train_data_loader[-1]), end='\r')
-            print(' '*100, end='\r')
+            # print('gpu_id', torch.cuda.current_device(), i, '/', len(self.train_data_loader[-1]), end='\r')
+            # print(' '*100, end='\r')
             # print(self.model.device, ' : ' , data_batch['img'].abs().sum().item(), data_batch['img'].shape)
 
             image_meta = data_batch['img_metas'].data[0]
             batch_size = kwargs['cfg'].data.train_dataloader['samples_per_gpu']
             temp_img_ids = [image_meta[j]['img_id'] for j in range(len(image_meta))]
-            if len(temp_img_ids) <batch_size:
+            if len(temp_img_ids) < batch_size:
                 add_item = temp_img_ids[-1]
                 temp_length = len(temp_img_ids)
                 for _ in range(batch_size - len(temp_img_ids)):
@@ -805,7 +805,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             all_grad += temp_grad
         
         # if self._epoch == 2:
-        self.pick_grad_dataset(kwargs)
+        # self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         self._epoch += 1
         block_epoch = 10
@@ -821,6 +821,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         
                 
     def pick_grad_dataset(self, kwargs):
+        print('start to pick grad dataset')
         import os
         import numpy as np
         import torch.distributed as dist
@@ -864,8 +865,13 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 f"/home/chenbeitao/data/code/Test/txt/epoch/out_result{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
                 out_all_grad_gather
             )
-            choose_index = ((all_grad_gather > mean).sum(dim=1) > all_grad_gather.shape[1]/2)
+            # choose_index = ((all_grad_gather > mean).sum(dim=1) > all_grad_gather.shape[1]/2)
+            # (((out1 > out1.mean(axis=0)*(1 + i/100)).sum(axis=1) > (out1>out1.mean(axis=0)).sumaxis=1).mean() * i/30).sum())
+            choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)
+            top_grad_img_index = np.argsort((out_all_grad_gather - out_all_grad_gather.mean(axis=0)).sum(axis=1))[::-1][:2].tolist()
+
             choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
+            choose_top_grad_img_index = all_imgids_gather[top_grad_img_index].reshape(-1).cpu().numpy().tolist()
             img_ids_set = set()
             img_ids_set.update(choose_img_ids)
             img_ids = list(img_ids_set)
@@ -886,8 +892,24 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 final_ann['images'].append(img)
                 final_ann['annotations'].extend(ann_list)
 
+                if img['id'] in choose_top_grad_img_index:
+                    file_name = img['file_name']
+                    source_img_file = os.path.join(
+                        '/home/chenbeitao/data/code/mmlab/mmpose/data/coco/train2017',
+                        file_name
+                    )
+                    target_dir = f'/home/chenbeitao/data/code/Test/txt/grad-image/epoch_{self._epoch}'
+                    if not os.path.exists(target_dir):
+                        os.makedirs(target_dir)
+                    target_img_file = os.path.join(
+                        target_dir,
+                        file_name
+                    )
+                    
+                    os.popen(f'cp {source_img_file} {target_img_file}')
+
             target_file_path = os.path.join(
-                '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'vis_temp_keypoints_train.json'
+                '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'temp_keypoints_train.json'
             )
             with open(target_file_path, 'w') as fd:
                 json.dump(final_ann, fd)
@@ -898,18 +920,24 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # for j in range(len(grad_gather_list)):
             #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
             
-            # print('-'*100, 'sleep 30')
-            # time.sleep(30)
+            # print('-'*50, 'sleep 5')
             # dist.broadcast(communication_tensor, src=0, async_op=False)
             dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
+            # for j in range(world_size):
+            #     if j == 0:
+            #         continue
+            #     dist.send(broadcast_tensor, dst=j)
             print(f'{this_rank} broadcast!')
         else:
             print(this_rank, ' wait to recv ')
+            # time.sleep(1)
             # dist.broadcast(communication_tensor, src=0, async_op=False)
             dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
+            # dist.recv(broadcast_tensor, src=0)
             print(f'{this_rank} received broadcast and finish gradent statistic')
         
         print(f'GPU {this_rank} epoch :{self._epoch}', broadcast_list)
+        # print(f'GPU {this_rank} epoch :{self._epoch}', broadcast_tensor)
 
         from mmpose.datasets import build_dataloader, build_dataset
         import copy
