@@ -663,6 +663,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
         def efficient_sample_grad_hook(grad):
             # print('-' * 10, grad.shape, len(self.iter_every_layer_grad))
+            # print('-' * 10, grad.shape, grad.abs().sum().item())
             self.iter_every_layer_grad.append(grad.abs().sum().item())
 
         if len(list(children_module[1].named_children())) == 0:
@@ -707,15 +708,16 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.call_hook('before_train_epoch')
         time.sleep(2)  # Prevent possible deadlock during epoch transition
 
-        import random
-        import os
-        import copy
-        seed = 0
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        os.environ['PYTHONHASHSEED'] = str(seed)
+        # import random
+        # import os
+        # import copy
+        # seed = 0
+        # random.seed(seed)
+        # np.random.seed(seed)
+        # torch.manual_seed(seed)
+        # torch.cuda.manual_seed(seed)
+        # os.environ['PYTHONHASHSEED'] = str(seed)
+
         # self.register_every_layer_hook(self.model.module.named_children())
         # self.register_all_model()                     # multi-hook will lead to multi-hook-call
         # for i, data_batch in enumerate(self.data_loader):
@@ -735,7 +737,6 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                     temp_img_ids.append(add_item)
             assert len(temp_img_ids) == batch_size
             temp_img_ids = np.array(temp_img_ids)
-
 
             self.all_img_ids.append(temp_img_ids)
 
@@ -807,7 +808,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # if self._epoch == 2:
         # self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
-        self._epoch += 1
+        
         block_epoch = 10
         if self._epoch > 0 and self._epoch % block_epoch == 0:
             self.train_data_loader = [self.train_data_loader[0]]
@@ -818,7 +819,21 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 self._epoch -= 1
                 self.cal_grad = True
         print('Epoch : ', self._epoch, self.cal_grad)
+        self._epoch += 1
         
+    def get_four_stages(self, all_grad_gather):
+        #  'stage1' : 51, 'stage3': 108, 'stage4': 483
+        ''' all_grad_gather : (N, 907) '''
+        # temp_grad = all_grad_gather[:, ::-1]
+        temp_grad = torch.flip(all_grad_gather, [1])
+        return torch.cat(
+            [
+                temp_grad[:, :51].sum(axis=1, keepdim=True), 
+                temp_grad[:, 51:108].sum(axis=1, keepdim=True),
+                temp_grad[:, 108:483].sum(axis=1, keepdim=True),
+                temp_grad[:, 483:].sum(axis=1, keepdim=True)
+            ], dim=1
+        )
                 
     def pick_grad_dataset(self, kwargs):
         print('start to pick grad dataset')
@@ -849,6 +864,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
             all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
+            all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
 
             mean = all_grad_gather.mean(dim=0)
@@ -862,12 +878,20 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
             out_all_grad_gather = all_grad_gather.cpu().numpy()
             np.savetxt(
-                f"/home/chenbeitao/data/code/Test/txt/epoch/out_result{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+                f"/home/chenbeitao/data/code/Test/txt/epoch/stage4_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+                # f"/home/chenbeitao/data/code/Test/txt/higher/stage4_pretrained_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
                 out_all_grad_gather
             )
             # choose_index = ((all_grad_gather > mean).sum(dim=1) > all_grad_gather.shape[1]/2)
             # (((out1 > out1.mean(axis=0)*(1 + i/100)).sum(axis=1) > (out1>out1.mean(axis=0)).sumaxis=1).mean() * i/30).sum())
-            choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)
+            # choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)
+            # choose_index = ((all_grad_gather > mean).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean())
+            pos_flag = ((all_grad_gather > mean).sum(axis=1) == 4)
+            neg_flag = ~pos_flag
+            pos_flag[torch.where(neg_flag == True)[0][:pos_flag.sum()]] = True
+            # choose_index = ((all_grad_gather > mean).sum(axis=1) == 4)
+            choose_index = pos_flag
+            
             top_grad_img_index = np.argsort((out_all_grad_gather - out_all_grad_gather.mean(axis=0)).sum(axis=1))[::-1][:2].tolist()
 
             choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
@@ -906,7 +930,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                         file_name
                     )
                     
-                    os.popen(f'cp {source_img_file} {target_img_file}')
+                    # os.popen(f'cp {source_img_file} {target_img_file}')
 
             target_file_path = os.path.join(
                 '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'temp_keypoints_train.json'
