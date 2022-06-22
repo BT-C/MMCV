@@ -809,7 +809,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         # self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         
-        block_epoch = 10
+        block_epoch = 20
         if self._epoch > 0 and self._epoch % block_epoch == 0:
             self.train_data_loader = [self.train_data_loader[0]]
             self.cal_grad = False

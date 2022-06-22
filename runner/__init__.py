@@ -17,7 +17,7 @@ from .hooks import (HOOKS, CheckpointHook, ClosureHook, DistEvalHook,
                     LoggerHook, MlflowLoggerHook, NeptuneLoggerHook,
                     OptimizerHook, PaviLoggerHook, SyncBuffersHook,
                     TensorboardLoggerHook, TextLoggerHook, WandbLoggerHook,
-                    EfficientSampleOptimizerHook)
+                    EfficientSampleOptimizerHook, AdaptiveptimizerHook)
 from .hooks.lr_updater import StepLrUpdaterHook  # noqa
 from .hooks.lr_updater import (CosineAnnealingLrUpdaterHook,
                                CosineRestartLrUpdaterHook, CyclicLrUpdaterHook,
@@ -49,7 +49,7 @@ __all__ = [
     'StepMomentumUpdaterHook', 'CosineAnnealingMomentumUpdaterHook',
     'CyclicMomentumUpdaterHook', 'OneCycleMomentumUpdaterHook',
     'OptimizerHook', 'IterTimerHook', 'DistSamplerSeedHook', 'LoggerHook',
-    'EfficientSampleOptimizerHook',
+    'EfficientSampleOptimizerHook', 'AdaptiveptimizerHook'
     'PaviLoggerHook', 'TextLoggerHook', 'TensorboardLoggerHook',
     'NeptuneLoggerHook', 'WandbLoggerHook', 'MlflowLoggerHook',
     'DvcliveLoggerHook', '_load_checkpoint', 'load_state_dict',
