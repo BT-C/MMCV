@@ -644,7 +644,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         self.every_layer_output = []
         self.every_layer_grad = []
         self.every_layer_name = []
-        self.iter_every_layer_grad = []
+        # self.iter_every_layer_grad = []
+        self.iter_every_layer_grad = torch.zeros((0)).cuda()
         for sub_module_tuple in self.model.module.named_children():
             self.register_every_layer_hook(sub_module_tuple)
         print('finish every layer hook')
@@ -664,7 +665,9 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         def efficient_sample_grad_hook(grad):
             # print('-' * 10, grad.shape, len(self.iter_every_layer_grad))
             # print('-' * 10, grad.shape, grad.abs().sum().item())
-            self.iter_every_layer_grad.append(grad.abs().sum().item())
+
+            # self.iter_every_layer_grad.append(grad.abs().sum().item())
+            self.iter_every_layer_grad = torch.cat([self.iter_every_layer_grad, grad.reshape(-1)])
 
         if len(list(children_module[1].named_children())) == 0:
             # children_module[1].register_forward_hook(
@@ -797,8 +800,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # ----------------------------------------------------------
             # self.every_layer_output = []
             
-            self.every_layer_grad.append(np.array(self.iter_every_layer_grad))
-            self.iter_every_layer_grad = []
+            self.every_layer_grad.append(self.iter_every_layer_grad.unsqueeze(0))
+            self.iter_every_layer_grad = torch.zeros((0)).cuda()
             # self.every_layer_name = []
 
         all_grad = 0
@@ -806,7 +809,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             all_grad += temp_grad
         
         # if self._epoch == 2:
-        # self.pick_grad_dataset(kwargs)
+        self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         
         block_epoch = 20
@@ -841,7 +844,8 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
         import numpy as np
         import torch.distributed as dist
         ROOT = 0
-        every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
+        # every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
+        every_layer_grad = torch.cat(self.every_layer_grad, dim=0)
         all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
         assert all_img_ids.shape[0] == every_layer_grad.shape[0]
 
@@ -864,7 +868,7 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
             all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
-            all_grad_gather = self.get_four_stages(all_grad_gather)
+            # all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
 
             mean = all_grad_gather.mean(dim=0)
@@ -877,11 +881,12 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
             # var = all_grad_gather.var(dim=0)
             # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
             out_all_grad_gather = all_grad_gather.cpu().numpy()
-            np.savetxt(
-                f"/home/chenbeitao/data/code/Test/txt/epoch/stage4_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
-                # f"/home/chenbeitao/data/code/Test/txt/higher/stage4_pretrained_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
-                out_all_grad_gather
-            )
+            # np.savetxt(
+            #     f"/home/chenbeitao/data/code/Test/txt/orientation/grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+            #     # f"/home/chenbeitao/data/code/Test/txt/higher/stage4_pretrained_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+            #     out_all_grad_gather
+            # )
+            
             # choose_index = ((all_grad_gather > mean).sum(dim=1) > all_grad_gather.shape[1]/2)
             # (((out1 > out1.mean(axis=0)*(1 + i/100)).sum(axis=1) > (out1>out1.mean(axis=0)).sumaxis=1).mean() * i/30).sum())
             # choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)

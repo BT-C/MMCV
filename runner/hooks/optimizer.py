@@ -958,7 +958,7 @@ class AdaptiveptimizerHook(Hook):
         #     model_weight += parameters.abs().sum().item()
         # print('before backward ', torch.cuda.current_device(), 'GPU Loss :', runner.outputs['loss'], 'model parameters :', model_weight)            
 
-        runner.outputs['loss'].backward()
+        # runner.outputs['loss'].backward()
 
         if self.grad_clip is not None:
             grad_norm = self.clip_grads(runner.model.parameters())
@@ -969,7 +969,7 @@ class AdaptiveptimizerHook(Hook):
 
         # if runner.epoch % 10 != 0:
         if self.fileter_function(runner):
-            runner.optimizer.step()
+            runner.optimizer.step(runner.outputs['loss'])
         
         
 
