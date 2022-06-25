@@ -1425,18 +1425,21 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
             self.every_layer_grad.append(self.iter_every_layer_grad.unsqueeze(0))
             self.iter_every_layer_grad = torch.zeros((0)).cuda()
             if len(self.every_layer_grad) == 30:
-                self.save_grad_vector()        
+                # self.save_grad_vector()        
+                pass
                 
 
         if len(self.every_layer_grad) > 0:
-            self.save_grad_vector()
+            # self.save_grad_vector()
+            pass
 
         all_grad = 0
         for temp_grad in self.grad_result:
             all_grad += temp_grad
         
         # if self._epoch == 2:
-        # self.pick_grad_dataset(kwargs)
+        # self.get_grad_dist()
+        self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         
         block_epoch = 20
@@ -1453,11 +1456,23 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
 
     def save_grad_vector(self):
         import os
+        import torch.nn.functional as F
+
         target_dir = f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}'
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
         file_name = f'iter_{self._inner_iter}_gpu_{torch.cuda.current_device()}.pt'
-        save_grad_ori = torch.cat(self.every_layer_grad, dim=0).cpu()
+        save_grad_ori = F.normalize(torch.cat(self.every_layer_grad, dim=0), p=2, dim=1)
+        
+        if self.max_val is None:
+            self.max_val = 0
+        if self.min_val is None:
+            self.min_val = 1000
+        self.max_val = max(save_grad_ori.abs().max(), self.max_val)
+        self.min_val = min(save_grad_ori.abs().min(), self.min_val)
+
+        save_grad_ori = save_grad_ori.cpu()
+
         torch.save(save_grad_ori, os.path.join(target_dir, file_name))
         self.every_layer_grad = []
         torch.cuda.empty_cache()
@@ -1475,7 +1490,73 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
                 temp_grad[:, 483:].sum(axis=1, keepdim=True)
             ], dim=1
         )
-                
+    
+    def get_block_list(self, file_num):
+        block_id = torch.ones((file_num, file_num))
+        block_id = torch.triu(block_id)
+        x_id, y_id = torch.where(block_id == 1)
+        block_id = torch.cat([x_id.unsqueeze(1), y_id.unsqueeze(1)], dim=1)
+
+        return block_id
+
+    def get_all_grad_file(self, file_list, world_size):
+        for i in range(len(file_list)):
+            file_list[i] = f"iter_{file_list[i].split('_')[1].zfill(6)}_gpu_{file_list[i].split('_')[-1].split('.')[0]}.pt"
+        file_list.sort()
+        out_file = []
+        for i in range(world_size):
+            out_file.extend(file_list[i::world_size])
+        assert len(out_file) == len(file_list)
+        for i in range(len(out_file)):
+            out_file[i] = f"iter_{int(out_file[i].split('_')[1])}_gpu_{out_file[i].split('_')[-1].split('.')[0]}.pt"
+
+        return out_file
+    
+    def get_self_block_ids_and_file_list(self):
+        import os
+        import math
+        import torch.distributed as dist
+
+        gpu_id = torch.cuda.current_device()
+        dirname, _, file_name = next(os.walk(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}'))
+        file_num = len(file_name)
+        block_ids = self.get_block_list(file_num) # (K, 2)
+        file_list = self.get_all_grad_file(file_name, dist.get_world_size())
+        block_length = math.ceil(block_ids.shape[0] / dist.get_world_size())
+        self_block_ids = block_ids[gpu_id * block_length : (gpu_id + 1) * block_length]
+
+        return self_block_ids, file_list
+
+    def get_grad_dist(self):
+        import os
+        import torch.nn.functional as F
+
+        gpu_id = torch.cuda.current_device()
+        block_ids, file_list = self.get_self_block_ids_and_file_list() # (N, 2) where N = file_num / world_size
+        grad_size = len(file_list) * 30
+        self.all_grad_dist = torch.zeros((grad_size, grad_size))
+        for k, (x_id, y_id) in enumerate(block_ids):
+            print(f'gpu:{gpu_id} {k} / {len(block_ids)}')
+            # x_file_name = f'iter_{x_id * 30 + 29}_gpu_{gpu_id}.pt'
+            # y_file_name = f'iter_{y_id * 30 + 29}_gpu_{}.pt'
+            x_file_name = file_list[x_id]
+            y_file_name = file_list[y_id]
+            x_grad = torch.load(
+                os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}', x_file_name)
+            ).cuda()
+            x_grad = F.normalize(x_grad, p=2, dim=1)
+            y_grad = torch.load(
+                os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}', y_file_name)
+            ).cuda()
+            y_grad = F.normalize(y_grad, p=2, dim=1)
+
+            for i in range(x_grad.shape[0]):
+                temp_dist = ((x_grad[i] - y_grad) ** 2).sum(dim=1)
+                self.all_grad_dist[x_id*30 + i, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
+            # break
+
+
+
     def pick_grad_dataset(self, kwargs):
         print('start to pick grad dataset')
         import os
@@ -1483,28 +1564,35 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
         import torch.distributed as dist
         ROOT = 0
         # every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
-        every_layer_grad = torch.cat(self.every_layer_grad, dim=0)
-        all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
-        assert all_img_ids.shape[0] == every_layer_grad.shape[0]
 
+        self.get_grad_dist()
+        self.all_grad_dist = self.all_grad_dist.cuda()
+        all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
+        
         self.every_layer_grad = []        
         self.all_img_ids = []
         this_rank = dist.get_rank()
         world_size = dist.get_world_size()
         # print(f'rank : {this_rank}, world_size : {world_size}')
-        communication_tensor = torch.zeros((1)).cuda()
-        grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
+        
+        grad_gather_list = [torch.zeros_like(self.all_grad_dist) for _ in range(world_size)]
         imgids_gather_list = [torch.zeros_like(all_img_ids) for _ in range(world_size)]
         broadcast_tensor = torch.tensor([this_rank], dtype=torch.int32).cuda()
         broadcast_list = [torch.zeros_like(broadcast_tensor) for _ in range(world_size)]
         print(f'{this_rank} send every layer grad')
-        dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
+        dist.all_gather(grad_gather_list, self.all_grad_dist.cuda(), async_op=False)
         dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
         if this_rank == 0:
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
 
-            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
+            # all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
+            all_grad_gather = torch.zeros_like(grad_gather_list[0])
+            for temp_grad_dist in grad_gather_list:
+                all_grad_gather += temp_grad_dist
+            torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}/grad-dist/grad_dist.pt')
+            assert 0 == 1
+
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
             # all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
