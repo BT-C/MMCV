@@ -8,10 +8,12 @@ import warnings
 import torch
 
 import mmcv
+
 from .base_runner import BaseRunner
 from .builder import RUNNERS
 from .checkpoint import save_checkpoint
 from .utils import get_host_info
+
 
 
 @RUNNERS.register_module()
@@ -259,6 +261,183 @@ class Runner(EpochBasedRunner):
 
 
 # =======================================================================================
+@RUNNERS.register_module()
+class SLSOptimizerEpochBasedRunner(BaseRunner):
+    """Epoch-based Runner.
+
+    This runner train models epoch by epoch.
+    """
+
+    def run_iter(self, data_batch, train_mode, **kwargs):
+        if self.batch_processor is not None:
+            outputs = self.batch_processor(
+                self.model, data_batch, train_mode=train_mode, **kwargs)
+        elif train_mode:
+            outputs = self.model.train_step(data_batch, self.optimizer,
+                                            **kwargs)
+        else:
+            outputs = self.model.val_step(data_batch, self.optimizer, **kwargs)
+        if not isinstance(outputs, dict):
+            raise TypeError('"batch_processor()" or "model.train_step()"'
+                            'and "model.val_step()" must return a dict')
+        if 'log_vars' in outputs:
+            self.log_buffer.update(outputs['log_vars'], outputs['num_samples'])
+        self.outputs = outputs
+
+    def train(self, data_loader, **kwargs):
+        self.model.train()
+        self.mode = 'train'
+        self.data_loader = data_loader
+        self._max_iters = self._max_epochs * len(self.data_loader)
+        self.call_hook('before_train_epoch')
+        time.sleep(2)  # Prevent possible deadlock during epoch transition
+        for i, data_batch in enumerate(self.data_loader):
+            self._inner_iter = i
+            self.call_hook('before_train_iter')
+
+            from mmpose.core.optimizer.SLS_optimizer import SLSOptimizer
+            if type(self.optimizer) == SLSOptimizer:
+                temp_inputs, temp_kwargs = self.model.scatter(data_batch, kwargs, self.model.device_ids)
+            
+                # output = self.module.train_step(*inputs[0], **kwargs[0])
+                # self.optimizer.loss_function = lambda : self.model.train_step(data_batch, self.optimizer, **kwargs)
+                self.optimizer.loss_function = lambda : self.model.module.train_step(*temp_inputs[0], **temp_kwargs[0])
+            
+            self.run_iter(data_batch, train_mode=True, **kwargs)
+            self.call_hook('after_train_iter')
+            self._iter += 1
+
+        self.call_hook('after_train_epoch')
+        self._epoch += 1
+
+    @torch.no_grad()
+    def val(self, data_loader, **kwargs):
+        self.model.eval()
+        self.mode = 'val'
+        self.data_loader = data_loader
+        self.call_hook('before_val_epoch')
+        time.sleep(2)  # Prevent possible deadlock during epoch transition
+        for i, data_batch in enumerate(self.data_loader):
+            self._inner_iter = i
+            self.call_hook('before_val_iter')
+            self.run_iter(data_batch, train_mode=False)
+            self.call_hook('after_val_iter')
+
+        self.call_hook('after_val_epoch')
+
+    def run(self, data_loaders, workflow, max_epochs=None, **kwargs):
+        """Start running.
+
+        Args:
+            data_loaders (list[:obj:`DataLoader`]): Dataloaders for training
+                and validation.
+            workflow (list[tuple]): A list of (phase, epochs) to specify the
+                running order and epochs. E.g, [('train', 2), ('val', 1)] means
+                running 2 epochs for training and 1 epoch for validation,
+                iteratively.
+        """
+        assert isinstance(data_loaders, list)
+        assert mmcv.is_list_of(workflow, tuple)
+        assert len(data_loaders) == len(workflow)
+        if max_epochs is not None:
+            warnings.warn(
+                'setting max_epochs in run is deprecated, '
+                'please set max_epochs in runner_config', DeprecationWarning)
+            self._max_epochs = max_epochs
+
+        assert self._max_epochs is not None, (
+            'max_epochs must be specified during instantiation')
+
+        for i, flow in enumerate(workflow):
+            mode, epochs = flow
+            if mode == 'train':
+                self._max_iters = self._max_epochs * len(data_loaders[i])
+                break
+
+        work_dir = self.work_dir if self.work_dir is not None else 'NONE'
+        self.logger.info('Start running, host: %s, work_dir: %s',
+                         get_host_info(), work_dir)
+        self.logger.info('Hooks will be executed in the following order:\n%s',
+                         self.get_hook_info())
+        self.logger.info('workflow: %s, max: %d epochs', workflow,
+                         self._max_epochs)
+        self.call_hook('before_run')
+
+        # ==================================================================================
+        print(kwargs)
+        # ==================================================================================
+
+        while self.epoch < self._max_epochs:
+            for i, flow in enumerate(workflow):
+                mode, epochs = flow
+                if isinstance(mode, str):  # self.train()
+                    if not hasattr(self, mode):
+                        raise ValueError(
+                            f'runner has no method named "{mode}" to run an '
+                            'epoch')
+                    epoch_runner = getattr(self, mode)
+                else:
+                    raise TypeError(
+                        'mode in workflow must be a str, but got {}'.format(
+                            type(mode)))
+
+                for _ in range(epochs):
+                    if mode == 'train' and self.epoch >= self._max_epochs:
+                        break
+                    kwargs['epoch'] = self.epoch
+                    epoch_runner(data_loaders[i], **kwargs)
+
+        time.sleep(1)  # wait for some hooks like loggers to finish
+        self.call_hook('after_run')
+
+    def save_checkpoint(self,
+                        out_dir,
+                        filename_tmpl='epoch_{}.pth',
+                        save_optimizer=True,
+                        meta=None,
+                        create_symlink=True):
+        """Save the checkpoint.
+
+        Args:
+            out_dir (str): The directory that checkpoints are saved.
+            filename_tmpl (str, optional): The checkpoint filename template,
+                which contains a placeholder for the epoch number.
+                Defaults to 'epoch_{}.pth'.
+            save_optimizer (bool, optional): Whether to save the optimizer to
+                the checkpoint. Defaults to True.
+            meta (dict, optional): The meta information to be saved in the
+                checkpoint. Defaults to None.
+            create_symlink (bool, optional): Whether to create a symlink
+                "latest.pth" to point to the latest checkpoint.
+                Defaults to True.
+        """
+        if meta is None:
+            meta = {}
+        elif not isinstance(meta, dict):
+            raise TypeError(
+                f'meta should be a dict or None, but got {type(meta)}')
+        if self.meta is not None:
+            meta.update(self.meta)
+            # Note: meta.update(self.meta) should be done before
+            # meta.update(epoch=self.epoch + 1, iter=self.iter) otherwise
+            # there will be problems with resumed checkpoints.
+            # More details in https://github.com/open-mmlab/mmcv/pull/1108
+        meta.update(epoch=self.epoch + 1, iter=self.iter)
+
+        filename = filename_tmpl.format(self.epoch + 1)
+        filepath = osp.join(out_dir, filename)
+        optimizer = self.optimizer if save_optimizer else None
+        save_checkpoint(self.model, filepath, optimizer=optimizer, meta=meta)
+        # in some environments, `os.symlink` is not supported, you may need to
+        # set `create_symlink` to False
+        if create_symlink:
+            dst_file = osp.join(out_dir, 'latest.pth')
+            if platform.system() != 'Windows':
+                mmcv.symlink(filename, dst_file)
+            else:
+                shutil.copy(filepath, dst_file)
+
+
 @RUNNERS.register_module()
 class EfficientSampleEpochBasedRunnerDebug(BaseRunner):
     """Epoch-based Runner.
@@ -823,6 +1002,465 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 self.cal_grad = True
         print('Epoch : ', self._epoch, self.cal_grad)
         self._epoch += 1
+        
+    def get_four_stages(self, all_grad_gather):
+        #  'stage1' : 51, 'stage3': 108, 'stage4': 483
+        ''' all_grad_gather : (N, 907) '''
+        # temp_grad = all_grad_gather[:, ::-1]
+        temp_grad = torch.flip(all_grad_gather, [1])
+        return torch.cat(
+            [
+                temp_grad[:, :51].sum(axis=1, keepdim=True), 
+                temp_grad[:, 51:108].sum(axis=1, keepdim=True),
+                temp_grad[:, 108:483].sum(axis=1, keepdim=True),
+                temp_grad[:, 483:].sum(axis=1, keepdim=True)
+            ], dim=1
+        )
+                
+    def pick_grad_dataset(self, kwargs):
+        print('start to pick grad dataset')
+        import os
+        import numpy as np
+        import torch.distributed as dist
+        ROOT = 0
+        # every_layer_grad = torch.from_numpy(np.array(self.every_layer_grad)).cuda() # (N/batch_size/world_size, 907)
+        every_layer_grad = torch.cat(self.every_layer_grad, dim=0)
+        all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
+        assert all_img_ids.shape[0] == every_layer_grad.shape[0]
+
+        self.every_layer_grad = []        
+        self.all_img_ids = []
+        this_rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        # print(f'rank : {this_rank}, world_size : {world_size}')
+        communication_tensor = torch.zeros((1)).cuda()
+        grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
+        imgids_gather_list = [torch.zeros_like(all_img_ids) for _ in range(world_size)]
+        broadcast_tensor = torch.tensor([this_rank], dtype=torch.int32).cuda()
+        broadcast_list = [torch.zeros_like(broadcast_tensor) for _ in range(world_size)]
+        print(f'{this_rank} send every layer grad')
+        dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
+        dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
+        if this_rank == 0:
+            print('all grad from other gpu :', len(grad_gather_list))
+            print(grad_gather_list[0].shape)
+
+            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
+            all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
+            # all_grad_gather = self.get_four_stages(all_grad_gather)
+            assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
+
+            mean = all_grad_gather.mean(dim=0)
+            # import matplotlib.pyplot as plt
+            # x = [_ for _ in range(len(mean))]
+            y = mean
+            # plt.plot(x, y)
+            # plt.savefig(f"/home/chenbeitao/data/code/Test/txt/out_result{torch.cuda.current_device()}.jpg")
+
+            # var = all_grad_gather.var(dim=0)
+            # norm_all_grad_gather = (all_grad_gather - mean) / (var + 1e-5)
+            out_all_grad_gather = all_grad_gather.cpu().numpy()
+            # np.savetxt(
+            #     f"/home/chenbeitao/data/code/Test/txt/orientation/grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+            #     # f"/home/chenbeitao/data/code/Test/txt/higher/stage4_pretrained_grad_{torch.cuda.current_device()}_{str(self._epoch)}.txt", 
+            #     out_all_grad_gather
+            # )
+            
+            # choose_index = ((all_grad_gather > mean).sum(dim=1) > all_grad_gather.shape[1]/2)
+            # (((out1 > out1.mean(axis=0)*(1 + i/100)).sum(axis=1) > (out1>out1.mean(axis=0)).sumaxis=1).mean() * i/30).sum())
+            # choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)
+            # choose_index = ((all_grad_gather > mean).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean())
+            pos_flag = ((all_grad_gather > mean).sum(axis=1) == 4)
+            neg_flag = ~pos_flag
+            pos_flag[torch.where(neg_flag == True)[0][:pos_flag.sum()]] = True
+            # choose_index = ((all_grad_gather > mean).sum(axis=1) == 4)
+            choose_index = pos_flag
+            
+            top_grad_img_index = np.argsort((out_all_grad_gather - out_all_grad_gather.mean(axis=0)).sum(axis=1))[::-1][:2].tolist()
+
+            choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
+            choose_top_grad_img_index = all_imgids_gather[top_grad_img_index].reshape(-1).cpu().numpy().tolist()
+            img_ids_set = set()
+            img_ids_set.update(choose_img_ids)
+            img_ids = list(img_ids_set)
+
+            from pycocotools.coco import COCO
+            import json
+            coco = COCO(kwargs['cfg'].data.train['ann_file'])
+            cat_ids = coco.getCatIds(catNms=['person'])
+            img_list = coco.loadImgs(ids=img_ids)
+            final_ann = {
+                'images' : [],
+                'annotations' : [],
+                'categories' : json.load(open(kwargs['cfg'].data.train['ann_file']))['categories'],
+            }
+            for j, img in enumerate(img_list):
+                ann_ids = coco.getAnnIds(imgIds=img['id'], catIds=cat_ids)
+                ann_list = coco.loadAnns(ids=ann_ids)
+                final_ann['images'].append(img)
+                final_ann['annotations'].extend(ann_list)
+
+                if img['id'] in choose_top_grad_img_index:
+                    file_name = img['file_name']
+                    source_img_file = os.path.join(
+                        '/home/chenbeitao/data/code/mmlab/mmpose/data/coco/train2017',
+                        file_name
+                    )
+                    target_dir = f'/home/chenbeitao/data/code/Test/txt/grad-image/epoch_{self._epoch}'
+                    if not os.path.exists(target_dir):
+                        os.makedirs(target_dir)
+                    target_img_file = os.path.join(
+                        target_dir,
+                        file_name
+                    )
+                    
+                    # os.popen(f'cp {source_img_file} {target_img_file}')
+
+            target_file_path = os.path.join(
+                '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'temp_keypoints_train.json'
+            )
+            with open(target_file_path, 'w') as fd:
+                json.dump(final_ann, fd)
+            
+            print('choose number : ', choose_index.sum().item())
+
+            print(all_grad_gather.shape)
+            # for j in range(len(grad_gather_list)):
+            #     print(grad_gather_list[j].shape, grad_gather_list[j][:5, :5])
+            
+            # print('-'*50, 'sleep 5')
+            # dist.broadcast(communication_tensor, src=0, async_op=False)
+            dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
+            # for j in range(world_size):
+            #     if j == 0:
+            #         continue
+            #     dist.send(broadcast_tensor, dst=j)
+            print(f'{this_rank} broadcast!')
+        else:
+            print(this_rank, ' wait to recv ')
+            # time.sleep(1)
+            # dist.broadcast(communication_tensor, src=0, async_op=False)
+            dist.all_gather(broadcast_list, broadcast_tensor, async_op=False)
+            # dist.recv(broadcast_tensor, src=0)
+            print(f'{this_rank} received broadcast and finish gradent statistic')
+        
+        print(f'GPU {this_rank} epoch :{self._epoch}', broadcast_list)
+        # print(f'GPU {this_rank} epoch :{self._epoch}', broadcast_tensor)
+
+        from mmpose.datasets import build_dataloader, build_dataset
+        import copy
+        new_train_cfg = copy.deepcopy(kwargs['cfg'].data.train)
+        new_train_cfg['ann_file'] = 'data/temp-coco/train/temp_keypoints_train.json'
+        train_loader_cfg = kwargs['train_loader_cfg']
+        new_datasets = build_dataset(new_train_cfg)
+        new_data_loaders = build_dataloader(new_datasets, **train_loader_cfg)
+        self.train_data_loader.append(new_data_loaders)
+
+    @torch.no_grad()
+    def val(self, data_loader, **kwargs):
+        self.model.eval()
+        self.mode = 'val'
+        self.data_loader = data_loader
+        self.call_hook('before_val_epoch')
+        time.sleep(2)  # Prevent possible deadlock during epoch transition
+        for i, data_batch in enumerate(self.data_loader):            
+            self._inner_iter = i
+            self.call_hook('before_val_iter')
+            self.run_iter(data_batch, train_mode=False)
+            self.call_hook('after_val_iter')
+
+        self.call_hook('after_val_epoch')
+
+    def run(self, data_loaders, workflow, max_epochs=None, 
+            train_loader_cfg=None, cfg=None, **kwargs):
+        """Start running.
+
+        Args:
+            data_loaders (list[:obj:`DataLoader`]): Dataloaders for training
+                and validation.
+            workflow (list[tuple]): A list of (phase, epochs) to specify the
+                running order and epochs. E.g, [('train', 2), ('val', 1)] means
+                running 2 epochs for training and 1 epoch for validation,
+                iteratively.
+        """
+        assert isinstance(data_loaders, list)
+        assert mmcv.is_list_of(workflow, tuple)
+        assert len(data_loaders) == len(workflow)
+        if max_epochs is not None:
+            warnings.warn(
+                'setting max_epochs in run is deprecated, '
+                'please set max_epochs in runner_config', DeprecationWarning)
+            self._max_epochs = max_epochs
+
+        assert self._max_epochs is not None, (
+            'max_epochs must be specified during instantiation')
+
+        for i, flow in enumerate(workflow):
+            mode, epochs = flow
+            if mode == 'train':
+                self._max_iters = self._max_epochs * len(data_loaders[i])
+                break
+
+        work_dir = self.work_dir if self.work_dir is not None else 'NONE'
+        self.logger.info('Start running, host: %s, work_dir: %s',
+                         get_host_info(), work_dir)
+        self.logger.info('Hooks will be executed in the following order:\n%s',
+                         self.get_hook_info())
+        self.logger.info('workflow: %s, max: %d epochs', workflow,
+                         self._max_epochs)
+        self.call_hook('before_run')
+
+        self.train_data_loader = data_loaders
+        self.cal_grad = True
+        self.register_all_model()
+        while self.epoch < self._max_epochs:
+            for i, flow in enumerate(workflow):
+                mode, epochs = flow
+                if isinstance(mode, str):  # self.train()
+                    if not hasattr(self, mode):
+                        raise ValueError(
+                            f'runner has no method named "{mode}" to run an '
+                            'epoch')
+                    epoch_runner = getattr(self, mode)
+                else:
+                    raise TypeError(
+                        'mode in workflow must be a str, but got {}'.format(
+                            type(mode)))
+
+                for _ in range(epochs):
+                    if mode == 'train' and self.epoch >= self._max_epochs:
+                        break
+                    kwargs['epoch'] = self.epoch
+                    kwargs['cfg'] = cfg
+                    kwargs['train_loader_cfg'] = train_loader_cfg
+                    epoch_runner(data_loaders[i], **kwargs)
+
+        time.sleep(1)  # wait for some hooks like loggers to finish
+        self.call_hook('after_run')
+
+    def save_checkpoint(self,
+                        out_dir,
+                        filename_tmpl='epoch_{}.pth',
+                        save_optimizer=True,
+                        meta=None,
+                        create_symlink=True):
+        """Save the checkpoint.
+
+        Args:
+            out_dir (str): The directory that checkpoints are saved.
+            filename_tmpl (str, optional): The checkpoint filename template,
+                which contains a placeholder for the epoch number.
+                Defaults to 'epoch_{}.pth'.
+            save_optimizer (bool, optional): Whether to save the optimizer to
+                the checkpoint. Defaults to True.
+            meta (dict, optional): The meta information to be saved in the
+                checkpoint. Defaults to None.
+            create_symlink (bool, optional): Whether to create a symlink
+                "latest.pth" to point to the latest checkpoint.
+                Defaults to True.
+        """
+        if meta is None:
+            meta = {}
+        elif not isinstance(meta, dict):
+            raise TypeError(
+                f'meta should be a dict or None, but got {type(meta)}')
+        if self.meta is not None:
+            meta.update(self.meta)
+            # Note: meta.update(self.meta) should be done before
+            # meta.update(epoch=self.epoch + 1, iter=self.iter) otherwise
+            # there will be problems with resumed checkpoints.
+            # More details in https://github.com/open-mmlab/mmcv/pull/1108
+        meta.update(epoch=self.epoch + 1, iter=self.iter)
+
+        filename = filename_tmpl.format(self.epoch + 1)
+        filepath = osp.join(out_dir, filename)
+        optimizer = self.optimizer if save_optimizer else None
+        save_checkpoint(self.model, filepath, optimizer=optimizer, meta=meta)
+        # in some environments, `os.symlink` is not supported, you may need to
+        # set `create_symlink` to False
+        if create_symlink:
+            dst_file = osp.join(out_dir, 'latest.pth')
+            if platform.system() != 'Windows':
+                mmcv.symlink(filename, dst_file)
+            else:
+                shutil.copy(filepath, dst_file)
+
+
+@RUNNERS.register_module()
+class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
+    """Epoch-based Runner.
+
+    This runner train models epoch by epoch.
+    """
+
+    def run_iter(self, data_batch, train_mode, **kwargs):
+        if self.batch_processor is not None:
+            outputs = self.batch_processor(
+                self.model, data_batch, train_mode=train_mode, **kwargs)
+        elif train_mode:
+            outputs = self.model.train_step(data_batch, self.optimizer,
+                                            **kwargs)
+        else:
+            outputs = self.model.val_step(data_batch, self.optimizer, **kwargs)
+        if not isinstance(outputs, dict):
+            raise TypeError('"batch_processor()" or "model.train_step()"'
+                            'and "model.val_step()" must return a dict')
+        if 'log_vars' in outputs:
+            self.log_buffer.update(outputs['log_vars'], outputs['num_samples'])
+        self.outputs = outputs
+
+    # -----------------------------------------------------------------------------------------
+    # def efficent_sample_forward_hook()
+    def register_all_model(self):
+        self.every_layer_output = []
+        self.every_layer_grad = []
+        self.every_layer_name = []
+        # self.iter_every_layer_grad = []
+        self.iter_every_layer_grad = torch.zeros((0)).cuda()
+        for sub_module_tuple in self.model.module.named_children():
+            self.register_every_layer_hook(sub_module_tuple)
+        print('finish every layer hook')
+
+    def register_every_layer_hook(self, children_module):
+        def efficient_sample_backward_hook(layer, gin, gout):
+            # print(type(layer), gout[0].abs().sum().item())
+            # if type(layer) != torch.nn.modules.loss.MSELoss:
+            # print(torch.cuda.current_device(), layer, gout[0].abs().sum().item())
+            print(torch.cuda.current_device(), layer)
+            for param in layer.parameters():
+                print(param.shape)
+                if param.grad is not None:
+                    print(param.shape, param.grad.abs().sum().item())
+            # self.every_layer_grad.append(gout[0].abs().sum().item())
+
+        def efficient_sample_grad_hook(grad):
+            # print('-' * 10, grad.shape, len(self.iter_every_layer_grad))
+            # print('-' * 10, grad.shape, grad.abs().sum().item())
+
+            # self.iter_every_layer_grad.append(grad.abs().sum().item())
+            self.iter_every_layer_grad = torch.cat([self.iter_every_layer_grad, grad.reshape(-1)])
+
+        if len(list(children_module[1].named_children())) == 0:
+            # children_module[1].register_forward_hook(
+            #     # lambda layer, input, output : print(output.shape, output.abs().sum())
+            #     lambda layer, input, output : self.every_layer_output.append(output.abs().sum().item())
+            # )
+
+            # children_module[1].register_backward_hook(
+            #     # lambda layer, gin, gout : print(gout[0].shape)
+            #     # lambda layer, gin, gout : print(gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : self.every_layer_grad.append(gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : print(layer, type(layer), gout[0].abs().sum().item())
+            #     # lambda layer, gin, gout : print(type(layer), layer.requires_grad)
+            #     efficient_sample_backward_hook
+            # )
+
+            self.every_layer_name.append(children_module[0])
+            for param in children_module[1].parameters():
+                param.register_hook(efficient_sample_grad_hook)
+                
+            return 
+
+        for sub_module_tuple in children_module[1].named_children():
+            self.register_every_layer_hook(sub_module_tuple)
+        
+    # -----------------------------------------------------------------------------------------
+
+    def train(self, data_loader, **kwargs):
+        self.model.train()
+        self.mode = 'train'
+        self.data_loader = data_loader
+        self._max_iters = self._max_epochs * len(self.data_loader)
+        self.all_layer_grad = []
+        self.every_layer_grad = []
+        self.all_img_ids = []
+
+        import numpy as np
+        temp_record = []
+        self.all_temp_layer_grad = []
+        self.grad_result = [0 for _ in range(4)]
+        self.call_hook('before_train_epoch')
+        time.sleep(2)  # Prevent possible deadlock during epoch transition
+
+        # for i, data_batch in enumerate(self.data_loader):
+        for i, data_batch in enumerate(self.train_data_loader[-1]):
+            self._inner_iter = i
+
+            image_meta = data_batch['img_metas'].data[0]
+            batch_size = kwargs['cfg'].data.train_dataloader['samples_per_gpu']
+            temp_img_ids = [image_meta[j]['img_id'] for j in range(len(image_meta))]
+            if len(temp_img_ids) < batch_size:
+                add_item = temp_img_ids[-1]
+                temp_length = len(temp_img_ids)
+                for _ in range(batch_size - len(temp_img_ids)):
+                    temp_img_ids.append(add_item)
+            assert len(temp_img_ids) == batch_size
+            temp_img_ids = np.array(temp_img_ids)
+
+            self.all_img_ids.append(temp_img_ids)
+
+            # temp_name = []
+            # temp_name.append(str(i))
+            # for j in range(len(image_meta)):
+            #     # print(image_meta[0][j]['image_file'])
+            #     temp_name.append(image_meta[j]['image_file'].split('/')[-1])
+            # self.image_meta = data_batch['img_metas'].data[0]
+            
+            # print(data_batch['img_metas'].data[0][0]['image_file'])
+            # temp_record.append(np.array([
+            #     i, len(self.data_loader), torch.cuda.current_device(),
+            #     data_batch['img'].abs().sum().item()
+            #     # *temp_name
+            # ]))
+            
+            self.call_hook('before_train_iter')
+            self.run_iter(data_batch, train_mode=True, **kwargs)
+            self.call_hook('after_train_iter')
+            # t = self.all_temp_layer_grad[-1].tolist()
+            # t.append(data_batch['img'].abs().sum().item())
+            # self.all_temp_layer_grad[-1] = np.array(t)
+
+            self._iter += 1
+            # ----------------------------------------------------------
+            self.every_layer_grad.append(self.iter_every_layer_grad.unsqueeze(0))
+            self.iter_every_layer_grad = torch.zeros((0)).cuda()
+            if len(self.every_layer_grad) == 30:
+                self.save_grad_vector()        
+                
+
+        if len(self.every_layer_grad) > 0:
+            self.save_grad_vector()
+
+        all_grad = 0
+        for temp_grad in self.grad_result:
+            all_grad += temp_grad
+        
+        # if self._epoch == 2:
+        # self.pick_grad_dataset(kwargs)
+        self.call_hook('after_train_epoch')
+        
+        block_epoch = 20
+        if self._epoch > 0 and self._epoch % block_epoch == 0:
+            self.train_data_loader = [self.train_data_loader[0]]
+            self.cal_grad = False
+        elif self._epoch % block_epoch == 1:
+            if self.cal_grad is None or self.cal_grad == False:
+                self.pick_grad_dataset(kwargs)
+                self._epoch -= 1
+                self.cal_grad = True
+        print('Epoch : ', self._epoch, self.cal_grad)
+        self._epoch += 1
+
+    def save_grad_vector(self):
+        import os
+        target_dir = f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}'
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+        file_name = f'iter_{self._inner_iter}_gpu_{torch.cuda.current_device()}.pt'
+        save_grad_ori = torch.cat(self.every_layer_grad, dim=0).cpu()
+        torch.save(save_grad_ori, os.path.join(target_dir, file_name))
+        self.every_layer_grad = []
+        torch.cuda.empty_cache()
         
     def get_four_stages(self, all_grad_gather):
         #  'stage1' : 51, 'stage3': 108, 'stage4': 483
