@@ -1286,6 +1286,28 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
                 shutil.copy(filepath, dst_file)
 
 
+
+def read_grad_oriental_file(q, block_id, file_list, epoch):
+        import os
+        import torch
+        
+        print('read file')
+        # ids = id.get()
+        x_id, y_id = block_id[0], block_id[1]
+        x_file_name = file_list[x_id]
+        y_file_name = file_list[y_id]
+        x_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{epoch}', x_file_name)
+        )
+        y_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{epoch}', y_file_name)
+        )
+                
+        print('put tensor')
+        q.put([block_id, [x_grad, y_grad]])
+
+        # q.join()
+
 @RUNNERS.register_module()
 class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
     """Epoch-based Runner.
@@ -1333,6 +1355,7 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
                     print(param.shape, param.grad.abs().sum().item())
             # self.every_layer_grad.append(gout[0].abs().sum().item())
 
+        
         def efficient_sample_grad_hook(grad):
             # print('-' * 10, grad.shape, len(self.iter_every_layer_grad))
             # print('-' * 10, grad.shape, grad.abs().sum().item())
@@ -1527,7 +1550,106 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
 
         return self_block_ids, file_list
 
+    
+    def calculate_grad_dist(self, q, block_size, gpu_id, in_pipe):
+        import torch.nn.functional as F
+        import torch
+        import time
+
+        count = 0
+        time.sleep(3)
+        print('start get tensor')
+        while True:
+            res = q.get()
+            if res is None:
+                break
+
+            print(f'gpu:{gpu_id} {count} / {block_size}')
+            x_id, y_id = res[0][0], res[0][1]
+            in_pipe.send(res)
+            # x_grad, y_grad = res[1][0].cuda(), res[1][1].cuda()
+            # x_grad = F.normalize(x_grad, p=2, dim=1)
+            # y_grad = F.normalize(y_grad, p=2, dim=1)
+            # print(x_grad.device, y_grad.device)
+            # for i in range(x_grad.shape[0]):
+            #     temp_dist = ((x_grad[i] - y_grad) ** 2).sum(dim=1)
+            #     self.all_grad_dist[x_id*30 + i, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
+                
+            count += 1
+            if count == block_size:
+                q.task_done()
+                return 
+
+    @staticmethod
+    def err_call_back(err):
+        print(f'catch error：{str(err)}')
+
+
     def get_grad_dist(self):
+        # from multiprocessing import Process, Pool, Pipe
+        import torch.nn.functional as F
+        from torch.multiprocessing import Process, Pool, Pipe
+        # import multiprocessing
+        import torch
+        # torch.multiprocessing.set_start_method('spawn')
+        # print(torch.multiprocessing.get_start_method())
+
+
+        gpu_id = torch.cuda.current_device()
+        block_ids, file_list = self.get_self_block_ids_and_file_list() # (N, 2) where N = file_num / world_size
+        grad_size = len(file_list) * 30
+        self.all_grad_dist = torch.zeros((grad_size, grad_size))
+        out_pipe, in_pipe = Pipe(True)
+
+        pool = Pool(4)
+        q = torch.multiprocessing.Manager().Queue()
+        tensor_p = Process(target=self.calculate_grad_dist, args=(q, block_ids.shape[0], gpu_id, in_pipe))
+
+        # id_list = [[i, i + 1] for i in range(60)]
+        result_list = []
+        for i in range(block_ids.shape[0]):
+            ret = pool.apply_async(
+                func=read_grad_oriental_file, 
+                args=(q, block_ids[i], file_list, self._epoch), 
+                error_callback=self.err_call_back
+            )
+            result_list.append(ret)
+        
+        tensor_p.start()
+        # self.calculate_grad_dist(q, block_ids.shape[0])
+        count = 0
+        block_size = block_ids.shape[0]
+        while True:
+            res = q.get()
+            if res is None:
+                break
+
+            print(f'gpu:{gpu_id} {count} / {block_size}')
+        
+            res = out_pipe.recv()
+            x_id, y_id = res[0][0], res[0][1]
+            x_grad, y_grad = res[1][0].cuda(), res[1][1].cuda()
+            x_grad = F.normalize(x_grad, p=2, dim=1)
+            y_grad = F.normalize(y_grad, p=2, dim=1)
+            print(x_grad.device, y_grad.device)
+            for i in range(x_grad.shape[0]):
+                temp_dist = ((x_grad[i] - y_grad) ** 2).sum(dim=1)
+                self.all_grad_dist[x_id*30 + i, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
+            
+            if count == block_size:
+                break
+        
+        pool.close()
+        pool.join()
+        # q.join()
+        # tensor_p.join()
+        
+        print('over')
+        assert 0 == 1
+
+
+
+    def test_get_grad_dist(self):
         import os
         import torch.nn.functional as F
 
