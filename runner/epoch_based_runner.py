@@ -1287,11 +1287,11 @@ class EfficientSampleEpochBasedRunner(BaseRunner):
 
 
 
-def read_grad_oriental_file(q, block_id, file_list, epoch):
+def read_grad_oriental_file_single(q, block_id, file_list, epoch, gpu_id):
         import os
         import torch
         
-        print('read file')
+        # print('read file')
         # ids = id.get()
         x_id, y_id = block_id[0], block_id[1]
         x_file_name = file_list[x_id]
@@ -1303,10 +1303,61 @@ def read_grad_oriental_file(q, block_id, file_list, epoch):
             os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{epoch}', y_file_name)
         )
                 
-        print('put tensor')
+        print(f'gpu {gpu_id} put tensor')
         q.put([block_id, [x_grad, y_grad]])
 
         # q.join()
+
+def read_grad_oriental_file_batch(q, block_id_list, file_list, epoch, gpu_id, process_id):
+    import os
+    import torch
+        
+    
+    # ids = id.get()
+    for i in range(block_id_list.shape[0]):
+        block_id = block_id_list[i]
+        x_id, y_id = block_id[0], block_id[1]
+        x_file_name = file_list[x_id]
+        y_file_name = file_list[y_id]
+        # x_grad, y_grad = None, None
+        print(f'process_id {process_id} start to read file')
+        x_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{epoch}', x_file_name)
+        )
+        y_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{epoch}', y_file_name)
+        )
+                
+        print(f'gpu {gpu_id} process_id {process_id} put tensor')
+        q.put([block_id, [x_grad, y_grad]])
+
+        # q.join()
+
+import os
+from torch.utils.data import DataLoader, Dataset
+class GradDataset(Dataset):
+    def __init__(self, file_list, block_ids, current_epoch):
+        self.block_ids = block_ids
+        self.file_list = file_list
+        self.epoch = current_epoch
+
+    def __len__(self):
+        return self.block_ids.shape[0]
+
+    def __getitem__(self, idx):
+        x_id, y_id = self.block_ids[idx][0], self.block_ids[idx][1]
+        x_file_name = self.file_list[x_id]
+        y_file_name = self.file_list[y_id]
+        # x_grad, y_grad = None, None
+        # print(f'process_id {process_id} start to read file')
+        x_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self.epoch}', x_file_name)
+        )
+        y_grad = torch.load(
+            os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self.epoch}', y_file_name)
+        )
+
+        return [[x_id, y_id], [x_grad, y_grad]]
 
 @RUNNERS.register_module()
 class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
@@ -1587,8 +1638,11 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
 
     def get_grad_dist(self):
         # from multiprocessing import Process, Pool, Pipe
+        import math
         import torch.nn.functional as F
         from torch.multiprocessing import Process, Pool, Pipe
+        from threading import Thread
+        
         # import multiprocessing
         import torch
         # torch.multiprocessing.set_start_method('spawn')
@@ -1601,46 +1655,58 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
         self.all_grad_dist = torch.zeros((grad_size, grad_size))
         out_pipe, in_pipe = Pipe(True)
 
-        pool = Pool(4)
+        # pool = Pool(10)
         q = torch.multiprocessing.Manager().Queue()
-        tensor_p = Process(target=self.calculate_grad_dist, args=(q, block_ids.shape[0], gpu_id, in_pipe))
+        # tensor_p = Process(target=self.calculate_grad_dist, args=(q, block_ids.shape[0], gpu_id, in_pipe))
 
         # id_list = [[i, i + 1] for i in range(60)]
-        result_list = []
-        for i in range(block_ids.shape[0]):
-            ret = pool.apply_async(
-                func=read_grad_oriental_file, 
-                args=(q, block_ids[i], file_list, self._epoch), 
-                error_callback=self.err_call_back
+        # result_list = []
+        # for i in range(block_ids.shape[0]):
+        #     ret = pool.apply_async(
+        #         func=read_grad_oriental_file, 
+        #         args=(q, block_ids[i], file_list, self._epoch, gpu_id), 
+        #         error_callback=self.err_call_back
+        #     )
+        #     result_list.append(ret)
+        process_num = 5
+        task_list = []
+        for i in range(process_num):
+            single_size = math.ceil(block_ids.shape[0] / process_num)
+            p_task = Process(
+                target=read_grad_oriental_file_batch, 
+                args=(q, block_ids[i * single_size : (i + 1) * single_size], file_list, self._epoch, gpu_id, i)
             )
-            result_list.append(ret)
+            task_list.append(p_task)
+            p_task.start()
         
-        tensor_p.start()
+        # tensor_p.start()
         # self.calculate_grad_dist(q, block_ids.shape[0])
         count = 0
         block_size = block_ids.shape[0]
+        print('GPU id :', torch.cuda.current_device())
         while True:
             res = q.get()
             if res is None:
                 break
 
-            print(f'gpu:{gpu_id} {count} / {block_size}')
+            # print(f'gpu:{gpu_id} {count} / {block_size}')
         
-            res = out_pipe.recv()
-            x_id, y_id = res[0][0], res[0][1]
-            x_grad, y_grad = res[1][0].cuda(), res[1][1].cuda()
-            x_grad = F.normalize(x_grad, p=2, dim=1)
-            y_grad = F.normalize(y_grad, p=2, dim=1)
-            print(x_grad.device, y_grad.device)
-            for i in range(x_grad.shape[0]):
-                temp_dist = ((x_grad[i] - y_grad) ** 2).sum(dim=1)
-                self.all_grad_dist[x_id*30 + i, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
+            # x_id, y_id = res[0][0], res[0][1]
+            # x_grad, y_grad = res[1][0].cuda(), res[1][1].cuda()
+            # x_grad = F.normalize(x_grad, p=2, dim=1)
+            # y_grad = F.normalize(y_grad, p=2, dim=1)
+            # for i in range(x_grad.shape[0]):
+            #     temp_dist = ((x_grad[i] - y_grad) ** 2).sum(dim=1)
+            #     self.all_grad_dist[x_id*30 + i, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
             
+            count += 1
             if count == block_size:
                 break
         
-        pool.close()
-        pool.join()
+        # pool.close()
+        # pool.join()
+        # for task in task_list:
+        #     task.join()
         # q.join()
         # tensor_p.join()
         
