@@ -1411,30 +1411,29 @@ import multiprocessing
 import multiprocessing.pool
 
 class GradDataset(Dataset):
-    def __init__(self, file_list, block_ids, current_epoch):
+    def __init__(self, file_list, block_ids, current_epoch, gpu_id):
         self.block_ids = block_ids
         self.file_list = file_list
         self.epoch = current_epoch
+        self.gpu_id = gpu_id
 
     def __len__(self):
-        return self.block_ids.shape[0]
+        return len(self.block_ids)
 
     def __getitem__(self, idx):
-        flag, x_id = self.block_ids[idx][0], self.block_ids[idx][1]
+        import time
+        x_id = self.block_ids[idx]
         x_file_name = self.file_list[x_id]
-        # y_file_name = self.file_list[y_id]
-        # x_grad, y_grad = None, None
-        # print(f'process_id {process_id} start to read file')
-        print('start to read')
+
+        print(f'gpu_id {self.gpu_id} start to read')
+        t1 = time.time()
         x_grad = torch.load(
             os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self.epoch}', x_file_name)
         )
-        # y_grad = torch.load(
-        #     os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self.epoch}', y_file_name)
-        # )
-        print('put grad tensor')
+        print('put grad tensor from ', x_file_name, 'time :', time.tmie() - t1)
+        # print(x_grad.shape)
 
-        return [[flag, x_id], x_grad]
+        return [x_id, x_grad]
 
 @RUNNERS.register_module()
 class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
@@ -2085,45 +2084,36 @@ class EfficientSampleGradOrientationEpochBasedRunner(BaseRunner):
         count = 0
         y_flag = True
         for i in range(block_ids[0][0], block_num):
-            print(f'gpu:{gpu_id}-{i}')
+            
             x_file_name = file_list[i]
             x_grad = torch.load(
                 os.path.join(f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}', x_file_name)
             ).cuda()
             x_grad = F.normalize(x_grad, p=2, dim=1)
+            print(f'gpu:{gpu_id}-{i}')
 
             init_j = block_ids[0][1] if y_flag else i + 1
-            
-            result_list = []
-            for j in range(init_j, block_num):
-                ret = temp_pool.apply_async(
-                    func=read_grad_oriental_file_one_by_one,
-                    args=(q, [0, j], file_list, self._epoch, gpu_id,),
-                    error_callback=self.err_call_back
-                )
-                result_list.append(ret)
+            grad_dataset = GradDataset(file_list, [t for t in range(init_j, block_num)], self._epoch, gpu_id)
+            grad_dataloader = DataLoader(
+                dataset=grad_dataset,
+                pin_memory=True,
+                batch_size=1,
+                num_workers=10,
+                prefetch_factor=1
+            )
 
-            
-            j_num = 0
-            while True:
-                res = q.get()
-                if res == None:
-                    break
-                count += 1
-                j_num += 1
+            for _, data in enumerate(grad_dataloader):
+                y_id, y_grad = data
 
+                count += y_grad.shape[0]
                 print(f'gpu:{gpu_id} {count} / {len(block_ids)}')
-                y_id = res[0][1]
-                y_grad = res[1]
-                y_grad = y_grad.cuda()
-                y_grad = F.normalize(y_grad, p=2, dim=1)    
+                # y_grad = y_grad.squeeze().cuda()
+                # y_grad = F.normalize(y_grad, p=2, dim=1)    
 
-                for t in range(x_grad.shape[0]):
-                    temp_dist = ((x_grad[t] - y_grad) ** 2).sum(dim=1)
-                    self.all_grad_dist[i*30 + t, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
+                # for t in range(x_grad.shape[0]):
+                #     temp_dist = ((x_grad[t] - y_grad) ** 2).sum(dim=1)
+                #     self.all_grad_dist[i*30 + t, y_id*30 : y_id*30 + y_grad.shape[0]] = temp_dist
 
-                if j_num == block_num - init_j:
-                    break
                 if count == block_length:
                     return 
 
