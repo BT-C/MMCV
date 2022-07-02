@@ -10,7 +10,8 @@ from .dist_utils import (allreduce_grads, allreduce_params, get_dist_info,
                          init_dist, master_only)
 from .epoch_based_runner import (EpochBasedRunner, Runner, 
                                 EfficientSampleEpochBasedRunner, SLSOptimizerEpochBasedRunner,
-                                EfficientSampleGradOrientationEpochBasedRunner)
+                                EfficientSampleGradOrientationEpochBasedRunner,
+                                EfficientSampleGradOrientationDoubleCircleEpochBasedRunner)
 from .fp16_utils import LossScaler, auto_fp16, force_fp32, wrap_fp16_model
 from .hooks import (HOOKS, CheckpointHook, ClosureHook, DistEvalHook,
                     DistSamplerSeedHook, DvcliveLoggerHook, EMAHook, EvalHook,
@@ -42,7 +43,8 @@ from .utils import get_host_info, get_time_str, obj_from_dict, set_random_seed
 
 __all__ = [
     'BaseRunner', 'Runner', 'EpochBasedRunner', 'IterBasedRunner', 'LogBuffer',
-    'EfficientSampleEpochBasedRunner', 'SLSOptimizerEpochBasedRunner', 'EfficientSampleGradOrientationEpochBasedRunner'
+    'EfficientSampleEpochBasedRunner', 'SLSOptimizerEpochBasedRunner', 'EfficientSampleGradOrientationEpochBasedRunner',
+    'EfficientSampleGradOrientationDoubleCircleEpochBasedRunner',
     'HOOKS', 'Hook', 'CheckpointHook', 'ClosureHook', 'LrUpdaterHook',
     'FixedLrUpdaterHook', 'StepLrUpdaterHook', 'ExpLrUpdaterHook',
     'PolyLrUpdaterHook', 'InvLrUpdaterHook', 'CosineAnnealingLrUpdaterHook',
