@@ -2573,7 +2573,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # self.every_layer_grad.append(self.iter_every_layer_grad.unsqueeze(0))
             # self.iter_every_layer_grad = torch.zeros((0)).cuda()
             # self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad))
-            self.every_layer_grad.append(torch.cat(self.iter_every_layer_grad, dim=0))
+            self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad).unsqueeze(0))
             self.iter_every_layer_grad = []
 
             # added_tensor = torch.cat(self.iter_every_layer_grad, dim=0)
@@ -3189,10 +3189,11 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
 
-            # all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
-            all_grad_gather = torch.zeros_like(grad_gather_list[0])
-            for temp_grad_dist in grad_gather_list:
-                all_grad_gather += temp_grad_dist
+            all_grad_gather = torch.cat(grad_gather_list, dim=0) # (N/batch_size, 878(HRNet)907(higherHRNet))
+
+            # all_grad_gather = torch.zeros_like(grad_gather_list[0])
+            # for temp_grad_dist in grad_gather_list:
+            #     all_grad_gather += temp_grad_dist
             # torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}/grad-dist/grad_dist.pt')
             # assert 0 == 1
 
@@ -3201,6 +3202,28 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
 
             mean = all_grad_gather.mean(dim=0)
+            all_grad_dist = (all_grad_gather - mean).abs().sum(dim=1)
+            assert all_grad_dist.shape == (all_grad_gather.shape[0])
+
+            all_grad_dist_order, all_grad_dist_index = torch.sort(all_grad_dist)
+            all_grad_L1_scale = all_grad_gather.abs().sum(dim=1) 
+            assert all_grad_L1_scale.shape == all_grad_dist.shape
+            assert all_grad_L1_scale.shape == all_grad_dist_index.shape
+            all_grad_L1_scale_order = all_grad_L1_scale[all_grad_dist_index]
+
+            choose_index = torch.zeros_like(all_grad_dist_index)
+            ''' first pick dataset '''
+            p1_grad_vector = all_grad_L1_scale_order * all_grad_dist_order
+            first_random_thr = torch.rand(p1_grad_vector.shape) * p1_grad_vector.max()
+            choose_index[p1_grad_vector > first_random_thr] = 1
+            ''' second pick dataset '''
+            p2_grad_vector = all_grad_dist_order.max() / all_grad_dist_order * all_grad_dist_order
+            second_random_thr = torch.rand(p2_grad_vector.shape) * p2_grad_vector.max()
+            choose_index[p2_grad_vector > second_random_thr] = 1
+
+            choose_index = (choose_index == 1)
+
+
             # import matplotlib.pyplot as plt
             # x = [_ for _ in range(len(mean))]
             y = mean
@@ -3250,21 +3273,21 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
                 final_ann['images'].append(img)
                 final_ann['annotations'].extend(ann_list)
 
-                if img['id'] in choose_top_grad_img_index:
-                    file_name = img['file_name']
-                    source_img_file = os.path.join(
-                        '/home/chenbeitao/data/code/mmlab/mmpose/data/coco/train2017',
-                        file_name
-                    )
-                    target_dir = f'/home/chenbeitao/data/code/Test/txt/grad-image/epoch_{self._epoch}'
-                    if not os.path.exists(target_dir):
-                        os.makedirs(target_dir)
-                    target_img_file = os.path.join(
-                        target_dir,
-                        file_name
-                    )
+                # if img['id'] in choose_top_grad_img_index:
+                #     file_name = img['file_name']
+                #     source_img_file = os.path.join(
+                #         '/home/chenbeitao/data/code/mmlab/mmpose/data/coco/train2017',
+                #         file_name
+                #     )
+                #     target_dir = f'/home/chenbeitao/data/code/Test/txt/grad-image/epoch_{self._epoch}'
+                #     if not os.path.exists(target_dir):
+                #         os.makedirs(target_dir)
+                #     target_img_file = os.path.join(
+                #         target_dir,
+                #         file_name
+                #     )
                     
-                    # os.popen(f'cp {source_img_file} {target_img_file}')
+                #     os.popen(f'cp {source_img_file} {target_img_file}')
 
             target_file_path = os.path.join(
                 '/mnt/hdd2/chenbeitao/code/mmlab/mmpose/data/temp-coco/train', 'temp_keypoints_train.json'
