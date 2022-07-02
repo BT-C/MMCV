@@ -3166,7 +3166,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
 
         # self.get_grad_dist()
         # self.all_grad_dist = self.all_grad_dist.cuda()
-        every_layer_grad = torch.cat(self.every_layer_grad, dim=0)
+        every_layer_grad = torch.cat(self.every_layer_grad, dim=0).cuda()
         all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
         assert all_img_ids.shape[0] == every_layer_grad.shape[0]
         
@@ -3196,17 +3196,27 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             #     all_grad_gather += temp_grad_dist
             # torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}/grad-dist/grad_dist.pt')
             # assert 0 == 1
-
+            
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
             # all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
 
             mean = all_grad_gather.mean(dim=0)
             all_grad_dist = (all_grad_gather - mean).abs().sum(dim=1)
-            assert all_grad_dist.shape == (all_grad_gather.shape[0])
+            mul_scale = 1
+            if all_grad_dist_order.min() < 1:
+                mul_scale = 10 ** (torch.floor(torch.log10(all_grad_dist_order.min())) * -1)
+            all_grad_dist *= mul_scale
+            assert all_grad_dist.shape[0] == all_grad_gather.shape[0]
 
             all_grad_dist_order, all_grad_dist_index = torch.sort(all_grad_dist)
-            all_grad_L1_scale = all_grad_gather.abs().sum(dim=1) 
+            
+            mul_scale = 1
+            all_grad_L1_scale = all_grad_gather.abs().sum(dim=1)
+            if all_grad_L1_scale.min() < 1:
+                mul_scale = 10 ** (torch.floor(torch.log10(all_grad_L1_scale.min())) * -1)
+            all_grad_L1_scale *= mul_scale
+            assert all_grad_L1_scale.min() > 1
             assert all_grad_L1_scale.shape == all_grad_dist.shape
             assert all_grad_L1_scale.shape == all_grad_dist_index.shape
             all_grad_L1_scale_order = all_grad_L1_scale[all_grad_dist_index]
@@ -3214,11 +3224,11 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             choose_index = torch.zeros_like(all_grad_dist_index)
             ''' first pick dataset '''
             p1_grad_vector = all_grad_L1_scale_order * all_grad_dist_order
-            first_random_thr = torch.rand(p1_grad_vector.shape) * p1_grad_vector.max()
+            first_random_thr = torch.rand(p1_grad_vector.shape).cuda() * p1_grad_vector.max()
             choose_index[p1_grad_vector > first_random_thr] = 1
             ''' second pick dataset '''
-            p2_grad_vector = all_grad_dist_order.max() / all_grad_dist_order * all_grad_dist_order
-            second_random_thr = torch.rand(p2_grad_vector.shape) * p2_grad_vector.max()
+            p2_grad_vector = all_grad_dist_order.max() / all_grad_dist_order * all_grad_L1_scale_order
+            second_random_thr = torch.rand(p2_grad_vector.shape).cuda() * p2_grad_vector.max()
             choose_index[p2_grad_vector > second_random_thr] = 1
 
             choose_index = (choose_index == 1)
@@ -3243,16 +3253,9 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # (((out1 > out1.mean(axis=0)*(1 + i/100)).sum(axis=1) > (out1>out1.mean(axis=0)).sumaxis=1).mean() * i/30).sum())
             # choose_index = ((all_grad_gather > mean*(1+self._epoch/1000)).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean() * self._epoch / 600)
             # choose_index = ((all_grad_gather > mean).sum(dim=1) > (all_grad_gather > mean).sum(axis=1).float().mean())
-            pos_flag = ((all_grad_gather > mean).sum(axis=1) == 4)
-            neg_flag = ~pos_flag
-            pos_flag[torch.where(neg_flag == True)[0][:pos_flag.sum()]] = True
-            # choose_index = ((all_grad_gather > mean).sum(axis=1) == 4)
-            choose_index = pos_flag
             
-            top_grad_img_index = np.argsort((out_all_grad_gather - out_all_grad_gather.mean(axis=0)).sum(axis=1))[::-1][:2].tolist()
-
             choose_img_ids = all_imgids_gather[choose_index].reshape(-1).cpu().numpy().tolist()
-            choose_top_grad_img_index = all_imgids_gather[top_grad_img_index].reshape(-1).cpu().numpy().tolist()
+            # choose_top_grad_img_index = all_imgids_gather[top_grad_img_index].reshape(-1).cpu().numpy().tolist()
             img_ids_set = set()
             img_ids_set.update(choose_img_ids)
             img_ids = list(img_ids_set)
