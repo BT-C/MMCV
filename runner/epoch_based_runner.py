@@ -2548,7 +2548,11 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         time.sleep(2)  # Prevent possible deadlock during epoch transition
 
         # for i, data_batch in enumerate(self.data_loader):
-        for i, data_batch in enumerate(self.train_data_loader[-1]):
+        # print('dataloader length :', len(self.train_data_loader[-1]))
+        temp_train_dataloader = self.train_data_loader[-1] if self.cal_grad else self.train_data_loader[0]
+        # for i, data_batch in enumerate(self.train_data_loader[-1]):
+        for i, data_batch in enumerate(temp_train_dataloader):
+            
             self._inner_iter = i
 
             image_meta = data_batch['img_metas'].data[0]
@@ -2604,8 +2608,8 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         # self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         
-        self.pick_grad_dataset(kwargs)
-        block_epoch = 20
+        # self.pick_grad_dataset(kwargs)
+        block_epoch = 1
         if self._epoch > 0 and self._epoch % block_epoch == 0:
             self.train_data_loader = [self.train_data_loader[0]]
             self.cal_grad = False
@@ -2615,6 +2619,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
                 self._epoch -= 1
                 self.cal_grad = True
         print('Epoch : ', self._epoch, self.cal_grad)
+        
         self._epoch += 1
 
     def save_grad_vector(self):
@@ -3204,8 +3209,8 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             mean = all_grad_gather.mean(dim=0)
             all_grad_dist = (all_grad_gather - mean).abs().sum(dim=1)
             mul_scale = 1
-            if all_grad_dist_order.min() < 1:
-                mul_scale = 10 ** (torch.floor(torch.log10(all_grad_dist_order.min())) * -1)
+            if all_grad_dist.min() < 1:
+                mul_scale = 10 ** (torch.floor(torch.log10(all_grad_dist.min())) * -1)
             all_grad_dist *= mul_scale
             assert all_grad_dist.shape[0] == all_grad_gather.shape[0]
 
@@ -3216,6 +3221,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             if all_grad_L1_scale.min() < 1:
                 mul_scale = 10 ** (torch.floor(torch.log10(all_grad_L1_scale.min())) * -1)
             all_grad_L1_scale *= mul_scale
+            assert all_grad_dist.min() > 1
             assert all_grad_L1_scale.min() > 1
             assert all_grad_L1_scale.shape == all_grad_dist.shape
             assert all_grad_L1_scale.shape == all_grad_dist_index.shape
@@ -3225,13 +3231,15 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             ''' first pick dataset '''
             p1_grad_vector = all_grad_L1_scale_order * all_grad_dist_order
             first_random_thr = torch.rand(p1_grad_vector.shape).cuda() * p1_grad_vector.max()
-            choose_index[p1_grad_vector > first_random_thr] = 1
+            choose_index[all_grad_dist_index[p1_grad_vector > first_random_thr]] = 1
             ''' second pick dataset '''
-            p2_grad_vector = all_grad_dist_order.max() / all_grad_dist_order * all_grad_L1_scale_order
+            p2_grad_vector = (all_grad_dist_order.max() / all_grad_dist_order) * all_grad_L1_scale_order
             second_random_thr = torch.rand(p2_grad_vector.shape).cuda() * p2_grad_vector.max()
-            choose_index[p2_grad_vector > second_random_thr] = 1
+            # choose_index[p2_grad_vector > second_random_thr] = 1
+            choose_index[all_grad_dist_index[p2_grad_vector > second_random_thr]] = 1
 
             choose_index = (choose_index == 1)
+            print('choose num : ', choose_index.sum())
 
 
             # import matplotlib.pyplot as plt
@@ -3330,6 +3338,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         train_loader_cfg = kwargs['train_loader_cfg']
         new_datasets = build_dataset(new_train_cfg)
         new_data_loaders = build_dataloader(new_datasets, **train_loader_cfg)
+        # print('new_data_loader :', len(new_data_loaders))
         self.train_data_loader.append(new_data_loaders)
 
     @torch.no_grad()
@@ -3348,7 +3357,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         self.call_hook('after_val_epoch')
 
     def run(self, data_loaders, workflow, max_epochs=None, 
-            train_loader_cfg=None, cfg=None, **kwargs):
+            train_loader_cfg=None, cfg=None, single_pick_data_loader=None, **kwargs):
         """Start running.
 
         Args:
@@ -3386,7 +3395,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
                          self._max_epochs)
         self.call_hook('before_run')
 
-        self.train_data_loader = data_loaders
+        self.train_data_loader = [single_pick_data_loader, data_loaders]
         self.cal_grad = True
         self.register_all_model()
         while self.epoch < self._max_epochs:
