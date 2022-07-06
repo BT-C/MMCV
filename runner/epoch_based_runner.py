@@ -2497,12 +2497,12 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # print('-' * 10, grad.shape, len(self.iter_every_layer_grad))
             # print('-' * 10, grad.shape, grad.abs().sum().item())
 
-            # self.iter_every_layer_grad.append(grad.abs().sum().item())
+            self.iter_every_layer_grad.append(grad.abs().sum().item())
             # pass
             # self.iter_every_layer_grad = torch.cat([self.iter_every_layer_grad, grad.reshape(-1)])
             # print(grad.shape, grad.reshape(-1).shape)
             # self.iter_every_layer_grad.append(grad.reshape(-1))
-            self.iter_every_layer_grad.append(grad.mean())
+            # self.iter_every_layer_grad.append(grad.mean())
 
 
         if len(list(children_module[1].named_children())) == 0:
@@ -2538,6 +2538,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         self._max_iters = self._max_epochs * len(self.data_loader)
         self.all_layer_grad = []
         self.every_layer_grad = []
+        self.output_loss = []
         self.all_img_ids = []
 
         import numpy as np
@@ -2549,11 +2550,14 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
 
         # for i, data_batch in enumerate(self.data_loader):
         # print('dataloader length :', len(self.train_data_loader[-1]))
+        self.cal_grad = False
         temp_train_dataloader = self.train_data_loader[-1] if self.cal_grad else self.train_data_loader[0]
+        print('dataloader length : ', len(temp_train_dataloader))
         # for i, data_batch in enumerate(self.train_data_loader[-1]):
         for i, data_batch in enumerate(temp_train_dataloader):
             
             self._inner_iter = i
+            print(f'{i} / {len(temp_train_dataloader)}', end='\r')
 
             image_meta = data_batch['img_metas'].data[0]
             batch_size = kwargs['cfg'].data.train_dataloader['samples_per_gpu']
@@ -2579,6 +2583,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad))
             self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad).unsqueeze(0))
             self.iter_every_layer_grad = []
+            self.output_loss.append(self.outputs.item())
 
             # added_tensor = torch.cat(self.iter_every_layer_grad, dim=0)
             # if self.sum_grad is None:
@@ -2608,8 +2613,8 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         # self.pick_grad_dataset(kwargs)
         self.call_hook('after_train_epoch')
         
-        # self.pick_grad_dataset(kwargs)
-        block_epoch = 1
+        self.pick_grad_dataset(kwargs)
+        block_epoch = 50
         if self._epoch > 0 and self._epoch % block_epoch == 0:
             self.train_data_loader = [self.train_data_loader[0]]
             self.cal_grad = False
@@ -3171,6 +3176,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
 
         # self.get_grad_dist()
         # self.all_grad_dist = self.all_grad_dist.cuda()
+        every_gpu_loss = torch.tensor(self.output_loss).cuda()
         every_layer_grad = torch.cat(self.every_layer_grad, dim=0).cuda()
         all_img_ids = torch.from_numpy(np.array(self.all_img_ids, dtype=np.int32)).cuda()   # (N/batch_size/world_size, batch_size)
         assert all_img_ids.shape[0] == every_layer_grad.shape[0]
@@ -3182,6 +3188,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         # print(f'rank : {this_rank}, world_size : {world_size}')
         
         # grad_gather_list = [torch.zeros_like(self.all_grad_dist) for _ in range(world_size)]
+        loss_gather_list = [torch.zeros_like(every_gpu_loss) for _ in range(world_size)]
         grad_gather_list = [torch.zeros_like(every_layer_grad) for _ in range(world_size)]
         imgids_gather_list = [torch.zeros_like(all_img_ids) for _ in range(world_size)]
         broadcast_tensor = torch.tensor([this_rank], dtype=torch.int32).cuda()
@@ -3190,6 +3197,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
         # dist.all_gather(grad_gather_list, self.all_grad_dist.cuda(), async_op=False)
         dist.all_gather(grad_gather_list, every_layer_grad, async_op=False)
         dist.all_gather(imgids_gather_list, all_img_ids, async_op=False)
+        dist.all_gather(loss_gather_list, every_gpu_loss, async_op=False)
         if this_rank == 0:
             print('all grad from other gpu :', len(grad_gather_list))
             print(grad_gather_list[0].shape)
@@ -3200,14 +3208,22 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # for temp_grad_dist in grad_gather_list:
             #     all_grad_gather += temp_grad_dist
             # torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/epoch_{self._epoch}/grad-dist/grad_dist.pt')
-            # assert 0 == 1
+            # torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/grad_dist_epoch_{self._epoch}.pt')
+            
+            
             
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
+            all_loss = torch.cat(loss_gather_list, dim=0)
+            torch.save(all_loss, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_loss.pt')
+            torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_grad.pt')
+            torch.save(all_imgids_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_image_id.pt')
+            assert 0 == 1
             # all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
 
             mean = all_grad_gather.mean(dim=0)
             all_grad_dist = (all_grad_gather - mean).abs().sum(dim=1)
+            all_grad_dist[all_grad_dist == 0] = all_grad_dist[all_grad_dist > 0].min() * 0.01
             mul_scale = 1
             if all_grad_dist.min() < 1:
                 mul_scale = 10 ** (torch.floor(torch.log10(all_grad_dist.min())) * -1)
@@ -3218,23 +3234,25 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             
             mul_scale = 1
             all_grad_L1_scale = all_grad_gather.abs().sum(dim=1)
+            all_grad_L1_scale[all_grad_L1_scale == 0] = all_grad_L1_scale[all_grad_L1_scale > 0].min() * 0.01
             if all_grad_L1_scale.min() < 1:
                 mul_scale = 10 ** (torch.floor(torch.log10(all_grad_L1_scale.min())) * -1)
             all_grad_L1_scale *= mul_scale
-            assert all_grad_dist.min() > 1
-            assert all_grad_L1_scale.min() > 1
+            # assert all_grad_dist.min() >= 1
+            # assert all_grad_L1_scale.min() >= 1
             assert all_grad_L1_scale.shape == all_grad_dist.shape
             assert all_grad_L1_scale.shape == all_grad_dist_index.shape
             all_grad_L1_scale_order = all_grad_L1_scale[all_grad_dist_index]
 
             choose_index = torch.zeros_like(all_grad_dist_index)
             ''' first pick dataset '''
-            p1_grad_vector = all_grad_L1_scale_order * all_grad_dist_order
-            first_random_thr = torch.rand(p1_grad_vector.shape).cuda() * p1_grad_vector.max()
+            p1_grad_vector = (all_grad_dist_order / all_grad_dist_order.min()) * all_grad_L1_scale_order
+            first_random_thr = torch.randn(p1_grad_vector.shape).cuda() * p1_grad_vector.std() + p1_grad_vector.mean()
             choose_index[all_grad_dist_index[p1_grad_vector > first_random_thr]] = 1
             ''' second pick dataset '''
             p2_grad_vector = (all_grad_dist_order.max() / all_grad_dist_order) * all_grad_L1_scale_order
-            second_random_thr = torch.rand(p2_grad_vector.shape).cuda() * p2_grad_vector.max()
+            # second_random_thr = torch.rand(p2_grad_vector.shape).cuda() * p2_grad_vector.max()
+            second_random_thr = torch.randn(p2_grad_vector.shape).cuda() * p2_grad_vector.std() + p2_grad_vector.mean()
             # choose_index[p2_grad_vector > second_random_thr] = 1
             choose_index[all_grad_dist_index[p2_grad_vector > second_random_thr]] = 1
 
@@ -3395,7 +3413,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
                          self._max_epochs)
         self.call_hook('before_run')
 
-        self.train_data_loader = [single_pick_data_loader, data_loaders]
+        self.train_data_loader = [single_pick_data_loader[0], data_loaders[0]]
         self.cal_grad = True
         self.register_all_model()
         while self.epoch < self._max_epochs:
