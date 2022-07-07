@@ -2583,7 +2583,7 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             # self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad))
             self.every_layer_grad.append(torch.tensor(self.iter_every_layer_grad).unsqueeze(0))
             self.iter_every_layer_grad = []
-            self.output_loss.append(self.outputs.item())
+            self.output_loss.append(self.outputs['loss'].item())
 
             # added_tensor = torch.cat(self.iter_every_layer_grad, dim=0)
             # if self.sum_grad is None:
@@ -3214,9 +3214,9 @@ class EfficientSampleGradOrientationDoubleCircleEpochBasedRunner(BaseRunner):
             
             all_imgids_gather = torch.cat(imgids_gather_list, dim=0)
             all_loss = torch.cat(loss_gather_list, dim=0)
-            torch.save(all_loss, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_loss.pt')
-            torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_grad.pt')
-            torch.save(all_imgids_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_image_id.pt')
+            torch.save(all_loss, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_loss_normal.pt')
+            torch.save(all_grad_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_grad_normal.pt')
+            torch.save(all_imgids_gather, f'/home/chenbeitao/data/code/Test/txt/orientation/double-circle/check_grad_dist_epoch_{self._epoch}_image_id_normal.pt')
             assert 0 == 1
             # all_grad_gather = self.get_four_stages(all_grad_gather)
             assert all_grad_gather.shape[0] == all_imgids_gather.shape[0]
